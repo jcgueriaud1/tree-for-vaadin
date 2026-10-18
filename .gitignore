@@ -1,0 +1,35 @@
+# Maven
+target/
+
+# Maven wrapper downloads Maven itself; nothing to keep beyond the scripts and properties
+.mvn/wrapper/maven-wrapper.jar
+
+# IDEs
+.idea/
+.vscode/
+.settings
+.project
+.classpath
+*.iml
+.DS_Store
+
+# Node, installed by frontend-maven-plugin (addon/) and vaadin-maven-plugin (demo/)
+node/
+node_modules/
+
+# Generated/updated by vaadin-maven-plugin when the demo runs in development mode
+demo/src/main/frontend/generated/
+demo/src/main/bundles/
+demo/package.json
+demo/package-lock.json
+demo/tsconfig.json
+demo/types.d.ts
+demo/vite.config.ts
+demo/vite.generated.ts
+
+# Playwright traces and screenshots from failed integration tests
+test-results/
+
+# Crash logs
+hs_err_pid*
+replay_pid*

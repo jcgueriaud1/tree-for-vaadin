@@ -1,0 +1,21 @@
+{
+  "name": "tree-for-vaadin-frontend-tests",
+  "private": true,
+  "description": "Test tooling for the <tfv-tree> element. Not shipped: at run time Lit comes from the Vaadin app.",
+  "type": "module",
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "pretest": "playwright install chromium",
+    "test": "npm run typecheck && web-test-runner"
+  },
+  "devDependencies": {
+    "@open-wc/testing": "5.0.0",
+    "@types/mocha": "10.0.10",
+    "@web/dev-server-esbuild": "2.0.0",
+    "@web/test-runner": "1.0.0",
+    "@web/test-runner-playwright": "1.0.0",
+    "lit": "3.3.3",
+    "playwright": "1.56.1",
+    "typescript": "7.0.2"
+  }
+}
