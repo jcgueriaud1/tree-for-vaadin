@@ -43,5 +43,5 @@ An item marked as chosen in checkbox mode; checking a parent checks all of its d
 _Avoid_: Selected item (in checkbox mode), ticked item
 
 **Partially checked item**:
-In checkbox mode, a parent whose descendants are only some of them checked.
+In checkbox mode, a parent with some, but not all, of its descendants checked.
 _Avoid_: Mixed item, half-selected, indeterminate item
