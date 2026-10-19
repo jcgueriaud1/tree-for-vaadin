@@ -1,4 +1,6 @@
 import { expect, fixture, html, nextFrame, waitUntil } from '@open-wc/testing';
+import { resetMouse, sendKeys, sendMouse } from '@web/test-runner-commands';
+import { Tooltip } from '@vaadin/tooltip/src/vaadin-tooltip.js';
 import {
   type ItemPage,
   PAGE_SIZE,
@@ -20,6 +22,9 @@ type FakeServer = TreeServer & {
   /** The key of the item the server has selected, and the keys of its ancestors. */
   selectedKey: string | null;
   selectionPath: string[];
+  /** The icon and tooltip of items, by label; items not in them have none. */
+  icons: Record<string, string>;
+  tooltips: Record<string, string>;
   /** While true, fetches wait until release() is called. */
   hold: boolean;
   release(): void;
@@ -48,6 +53,8 @@ function serverWith(roots: FakeItem[]): FakeServer {
     selections: [],
     selectedKey: null,
     selectionPath: [],
+    icons: {},
+    tooltips: {},
     hold: false,
     release() {
       const resolve = waiting;
@@ -62,10 +69,16 @@ function serverWith(roots: FakeItem[]): FakeServer {
       const level = children(parentKey);
       const items = level.slice(offset, offset + limit).map((item, i) => {
         const key = parentKey === null ? String(offset + i) : `${parentKey}/${offset + i}`;
-        const selection = { selected: key === server.selectedKey, onSelectionPath: server.selectionPath.includes(key) };
+        const label = typeof item === 'string' ? item : item[0];
+        const extras = {
+          icon: server.icons[label] ?? null,
+          tooltip: server.tooltips[label] ?? null,
+          selected: key === server.selectedKey,
+          onSelectionPath: server.selectionPath.includes(key),
+        };
         return typeof item === 'string'
-          ? { key, label: item, expandable: false, expanded: false, ...selection }
-          : { key, label: item[0], expandable: item[1].length > 0, expanded: item[2] ?? false, ...selection };
+          ? { key, label, expandable: false, expanded: false, ...extras }
+          : { key, label, expandable: item[1].length > 0, expanded: item[2] ?? false, ...extras };
       });
       return { items, size: level.length };
     },
@@ -820,6 +833,144 @@ describe('tfv-tree', () => {
 
       expect(server.expansions).to.be.empty;
       expect(server.selections).to.be.empty;
+    });
+  });
+
+  describe('icons and tooltips', () => {
+    function folderServer(): FakeServer {
+      const server = serverWith(['Documents', 'Music', 'Pictures']);
+      server.icons = { Documents: 'vaadin:folder', Music: 'vaadin:music' };
+      server.tooltips = { Documents: 'Your documents', Pictures: 'Your pictures' };
+      return server;
+    }
+
+    function tooltip(tree: TfvTree): Tooltip {
+      return tree.shadowRoot!.querySelector('vaadin-tooltip')!;
+    }
+
+    function description(tree: TfvTree, label: string): string | undefined {
+      const id = item(tree, label).getAttribute('aria-describedby');
+      return id === null ? undefined : tree.shadowRoot!.getElementById(id)?.textContent!;
+    }
+
+    function hover(element: Element): void {
+      element.dispatchEvent(new MouseEvent('mouseover', { bubbles: true, composed: true }));
+    }
+
+    before(() => {
+      Tooltip.setDefaultHoverDelay(0);
+      Tooltip.setDefaultFocusDelay(0);
+      Tooltip.setDefaultHideDelay(0);
+    });
+
+    after(() => {
+      Tooltip.setDefaultHoverDelay(-1);
+      Tooltip.setDefaultFocusDelay(-1);
+      Tooltip.setDefaultHideDelay(-1);
+    });
+
+    it('shows the icon of an item before its label, hidden from assistive technology', async () => {
+      const tree = await treeWith(folderServer());
+
+      const icon = item(tree, 'Documents').querySelector('[part="icon"]')!;
+      expect(icon.localName).to.equal('vaadin-icon');
+      expect(icon.getAttribute('icon')).to.equal('vaadin:folder');
+      expect(icon.getAttribute('aria-hidden')).to.equal('true');
+      expect(icon.nextElementSibling!.getAttribute('part')).to.equal('label');
+      expect(labels(tree)).to.deep.equal(['Documents', 'Music', 'Pictures'], 'the label stays the only text');
+    });
+
+    it('shows no icon for an item without one', async () => {
+      const tree = await treeWith(folderServer());
+
+      expect(item(tree, 'Pictures').querySelector('[part="icon"]')).to.equal(null);
+    });
+
+    it('describes an item by its tooltip, and an item without one by nothing', async () => {
+      const tree = await treeWith(folderServer());
+
+      expect(description(tree, 'Documents')).to.equal('Your documents');
+      expect(item(tree, 'Music').hasAttribute('aria-describedby')).to.equal(false);
+      expect(tooltip(tree).getAttribute('aria-hidden')).to.equal('true', 'a tree only holds treeitems');
+    });
+
+    it('opens the tooltip of the item hovered, and closes it over an item without one', async () => {
+      const tree = await treeWith(folderServer());
+
+      hover(item(tree, 'Documents').querySelector('[part="label"]')!);
+      await tree.updateComplete;
+
+      expect(tooltip(tree).opened).to.equal(true);
+      expect(tooltip(tree).target).to.equal(item(tree, 'Documents'));
+      expect(tooltip(tree).text).to.equal('Your documents');
+
+      hover(item(tree, 'Pictures'));
+      expect(tooltip(tree).target).to.equal(item(tree, 'Pictures'));
+      expect(tooltip(tree).text).to.equal('Your pictures');
+
+      hover(item(tree, 'Music'));
+      expect(tooltip(tree).opened).to.equal(false);
+    });
+
+    it('closes the tooltip when the item is pressed, until another item is hovered', async () => {
+      const tree = await treeWith(folderServer());
+      hover(item(tree, 'Documents'));
+
+      const label = item(tree, 'Documents').querySelector('[part="label"]')!;
+      label.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, composed: true }));
+      hover(label);
+
+      expect(tooltip(tree).opened).to.equal(false);
+    });
+
+    it('opens the tooltip of the item focused with the keyboard, and closes it with Escape', async () => {
+      const tree = await treeWith(folderServer());
+
+      await sendKeys({ press: 'Tab' });
+      await tree.updateComplete;
+      expect(focusedLabel(tree)).to.equal('Documents');
+      expect(tooltip(tree).opened).to.equal(true);
+      expect(tooltip(tree).text).to.equal('Your documents');
+
+      await sendKeys({ press: 'ArrowDown' });
+      expect(focusedLabel(tree)).to.equal('Music');
+      expect(tooltip(tree).opened).to.equal(false);
+
+      await sendKeys({ press: 'ArrowDown' });
+      expect(tooltip(tree).opened).to.equal(true);
+      expect(tooltip(tree).target).to.equal(item(tree, 'Pictures'));
+
+      let escaped = false;
+      document.addEventListener('keydown', () => (escaped = true), { once: true });
+      await sendKeys({ press: 'Escape' });
+      expect(tooltip(tree).opened).to.equal(false);
+      expect(escaped).to.equal(false, 'Escape closing the tooltip goes no further');
+    });
+
+    it('does not open the tooltip of an item focused by clicking it', async () => {
+      const tree = await treeWith(folderServer());
+      const { x, y, height } = item(tree, 'Documents').querySelector('[part="label"]')!.getBoundingClientRect();
+
+      await sendMouse({ type: 'click', position: [Math.round(x + 5), Math.round(y + height / 2)] });
+      await settle(tree);
+
+      expect(focusedLabel(tree)).to.equal('Documents');
+      expect(tooltip(tree).opened).to.equal(false);
+      await resetMouse();
+    });
+
+    it('closes the tooltip when its item is hidden', async () => {
+      const server = serverWith(FOLDERS);
+      server.tooltips = { Invoices: 'Paid and unpaid' };
+      const tree = await treeWith(server);
+      await clickToggle(tree, 'Documents');
+      hover(item(tree, 'Invoices'));
+      expect(tooltip(tree).opened).to.equal(true);
+
+      tree.setItemExpanded('0', false);
+      await settle(tree);
+
+      expect(tooltip(tree).opened).to.equal(false);
     });
   });
 });

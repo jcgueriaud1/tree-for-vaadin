@@ -420,11 +420,62 @@ class TreeViewIT {
     }
 
     @Test
+    void itemsShowADecorativeIconBeforeTheirLabel() {
+        Locator documents = item(folders(), "Documents");
+        Locator icon = documents.locator("vaadin-icon[part=icon]");
+
+        assertThat(icon).hasAttribute("icon", "vaadin:folder");
+        assertThat(icon).hasAttribute("aria-hidden", "true");
+        assertThat(icon.locator("svg path")).not().hasCount(0);
+        assertThat(documents).hasAccessibleName("Documents");
+
+        Locator catalogue = page.getByRole(AriaRole.TREE, new Page.GetByRoleOptions().setName("Catalogue"));
+        Locator books = item(catalogue, "Books");
+        assertThat(books.locator("[part=icon]")).hasAttribute("icon", "vaadin:folder");
+        books.locator("[part=toggle]").click();
+        assertThat(item(catalogue, "Books item 1").locator("[part=icon]")).hasAttribute("icon", "vaadin:file");
+    }
+
+    @Test
+    void hoveringAnItemShowsItsTooltipWhichAlsoDescribesIt() {
+        item(folders(), "Documents").locator("[part=toggle]").click();
+        Locator letters = item(folders(), "Letters");
+        assertThat(letters).hasAccessibleDescription("Documents / Letters");
+        assertThat(item(folders(), "Documents")).hasAccessibleDescription("");
+
+        letters.locator("[part=label]").hover();
+
+        assertThat(tooltip()).hasText("Documents / Letters");
+
+        item(folders(), "Music").locator("[part=label]").hover();
+
+        assertThat(tooltip()).isHidden();
+    }
+
+    @Test
+    void focusingAnItemWithTheKeyboardShowsItsTooltipAndEscapeHidesIt() {
+        tabIntoFolders();
+        page.keyboard().press("ArrowRight");
+        assertThat(item(folders(), "Invoices")).isVisible();
+        page.keyboard().press("ArrowRight");
+
+        assertThat(item(folders(), "Invoices")).isFocused();
+        assertThat(tooltip()).hasText("Documents / Invoices");
+
+        page.keyboard().press("Escape");
+
+        assertThat(tooltip()).isHidden();
+        assertThat(item(folders(), "Invoices")).isFocused();
+    }
+
+    @Test
     void thePageHasNoAccessibilityViolations() {
         page.getByRole(AriaRole.BUTTON, new Page.GetByRoleOptions().setName("Expand all")).click();
         assertThat(item(folders(), "Holidays")).isVisible();
         item(folders(), "2026").click();
         assertOnSelectionPath("Letters");
+        item(folders(), "Letters").locator("[part=label]").hover();
+        assertThat(tooltip()).isVisible();
 
         // Vaadin's connection indicator sits outside any landmark; it is not ours to fix
         AxeResults results = new AxeBuilder(page).exclude(List.of("vaadin-connection-indicator")).analyze();
@@ -454,6 +505,11 @@ class TreeViewIT {
 
     private Locator status() {
         return page.getByRole(AriaRole.STATUS).first();
+    }
+
+    /** The tooltip of the folders, hidden from assistive technology as a tree only holds treeitems. */
+    private Locator tooltip() {
+        return folders().locator("[role=tooltip]");
     }
 
     private Locator folders() {

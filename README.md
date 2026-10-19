@@ -11,7 +11,7 @@ The words in bold below are defined in [GLOSSARY.md](GLOSSARY.md); the design de
 
 The tree shows its **root items**, and items can be **expanded** and **collapsed**, by the user (with the
 toggle in front of an item, or the keyboard) or by the server. The user selects an item by clicking it, or
-with Enter or Space. Checkbox selection is still to come.
+with Enter or Space. Items can show an icon and a tooltip. Checkbox selection is still to come.
 
 ## Usage
 
@@ -22,6 +22,8 @@ data.addRootItems(documents, music, pictures);
 Tree<Folder> tree = new Tree<>();
 tree.setItems(data);                    // or setDataProvider(anyHierarchicalDataProvider)
 tree.setItemLabelGenerator(Folder::name);
+tree.setItemIconGenerator(folder -> "vaadin:folder");  // an icon name, or null for none
+tree.setItemTooltipGenerator(Folder::description);     // the tooltip text, or null for none
 tree.setAriaLabel("Folders");           // the accessible name of the tree
 
 tree.expand(documents);                 // or collapse(...), isExpanded(...)
@@ -53,6 +55,20 @@ the value never expands anything. The ancestors of the selected item, its **sele
 data provider to implement `getParent`, as `TreeDataProvider` does, and is left out otherwise.
 `scrollToItem(item)` needs `getParent` too: it expands the item's ancestors and fetches the pages on the way
 down, then scrolls the item into view.
+
+### Icons and tooltips
+
+`setItemIconGenerator` gives each item the name of an icon, such as `vaadin:folder`, shown
+with `<vaadin-icon>` before its label (part `icon`, sized by `--vaadin-tree-icon-size`); `null` means no icon.
+Icons are decorative: they are `aria-hidden`, and the label stays the accessible name of the item. The
+`vaadin:` icons come with the add-on; other icon sets must be loaded by the app.
+
+`setItemTooltipGenerator` gives each item an optional tooltip text; `null` or empty means no tooltip. One
+`<vaadin-tooltip>` follows the item hovered or focused with the keyboard, with the same delays as other Vaadin
+tooltips, and Escape closes it. As a tree only holds treeitems, the tooltip itself is hidden from assistive
+technology: its text is the item's accessible description (`aria-describedby`) instead, whether or not the
+tooltip shows. Items hold text only, not server-side components.
+`setTooltipText`, from `HasTooltip`, is a tooltip for the whole tree instead.
 
 ### Keyboard
 
@@ -86,7 +102,7 @@ focused item has a focus ring; the selected item a background.
 - Lit tests alone: `cd addon && npm ci && npm test`
 
 The Lit element (`addon/src/main/resources/META-INF/resources/frontend/tfv-tree/`) ships inside the jar and is
-loaded with `@JsModule`. `addon/package.json` only holds test tooling: at run time Lit comes from the Vaadin app.
+loaded with `@JsModule`. `addon/package.json` only holds test tooling: at run time Lit, `<vaadin-icon>` and `<vaadin-tooltip>` come from the Vaadin app.
 
 ## License
 

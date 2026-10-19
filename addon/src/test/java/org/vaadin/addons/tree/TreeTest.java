@@ -107,6 +107,45 @@ class TreeTest extends BrowserlessTest {
     }
 
     @Test
+    void itemsHaveNoIconOrTooltipUnlessGenerated() {
+        TreeItem documents = tree.fetchChildren(null, 0, 50).items().get(0);
+
+        assertNull(documents.icon());
+        assertNull(documents.tooltip());
+    }
+
+    @Test
+    void theIconAndTooltipOfAnItemComeFromTheGenerators() {
+        tree.setItemIconGenerator(folder -> folder.equals(docs) ? "vaadin:folder" : null);
+        tree.setItemTooltipGenerator(folder -> folder.equals(music) ? null : folder.name() + " folder");
+
+        List<TreeItem> items = tree.fetchChildren(null, 0, 50).items();
+
+        assertEquals("vaadin:folder", items.get(0).icon());
+        assertEquals("Documents folder", items.get(0).tooltip());
+        assertNull(items.get(1).icon(), "null means no icon");
+        assertNull(items.get(1).tooltip(), "null means no tooltip");
+        assertEquals("Documents", items.get(0).label(), "the label is left as it is");
+    }
+
+    @Test
+    void settingAGeneratorHasTheBrowserFetchTheItemsAgain() {
+        tree.fetchChildren(null, 0, 50);
+        calls("refresh");
+
+        tree.setItemIconGenerator(folder -> "vaadin:folder");
+        assertEquals(1, calls("refresh").size());
+        tree.setItemTooltipGenerator(Folder::name);
+        assertEquals(1, calls("refresh").size());
+    }
+
+    @Test
+    void theGeneratorsAreNotNull() {
+        assertThrows(NullPointerException.class, () -> tree.setItemIconGenerator(null));
+        assertThrows(NullPointerException.class, () -> tree.setItemTooltipGenerator(null));
+    }
+
+    @Test
     void aTreeWithoutItemsHasAnEmptyRootPage() {
         ItemPage page = new Tree<String>().fetchChildren(null, 0, 50);
 

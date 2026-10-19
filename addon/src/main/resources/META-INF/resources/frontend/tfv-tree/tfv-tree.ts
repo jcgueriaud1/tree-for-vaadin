@@ -2,13 +2,16 @@ import { css, html, LitElement, nothing, type PropertyValues } from 'lit';
 import { repeat } from 'lit/directives/repeat.js';
 
 /**
- * An item as the server sends it: the key to refer to it by, its label, whether it
- * has child items, whether it is expanded, whether it is the selected item and
- * whether it is on the selection path.
+ * An item as the server sends it: the key to refer to it by, its label, its icon and
+ * tooltip if any, whether it has child items, whether it is expanded, whether it is
+ * the selected item and whether it is on the selection path.
  */
 export interface TreeItem {
   key: string;
   label: string;
+  /** The name of a `<vaadin-icon>`, such as `vaadin:folder`. */
+  icon: string | null;
+  tooltip: string | null;
   expandable: boolean;
   expanded: boolean;
   selected: boolean;
@@ -33,6 +36,20 @@ export const PAGE_SIZE = 50;
 
 /** How long type-ahead waits for the next character before starting a new search, in milliseconds. */
 export const TYPE_AHEAD_TIMEOUT = 500;
+
+/**
+ * The parts of `<vaadin-tooltip>` the tree uses. Its `_stateController` opens and
+ * closes it with the same delays as other tooltips, as `<vaadin-grid>` does.
+ */
+interface Tooltip extends HTMLElement {
+  target: HTMLElement | null;
+  text: string | null;
+  opened: boolean;
+  _stateController?: {
+    open(options: { hover?: boolean; focus?: boolean }): void;
+    close(immediate?: boolean): void;
+  };
+}
 
 /** The text shown while the items of a level are being fetched. */
 const LOADING = 'Loading…';
@@ -102,6 +119,12 @@ function hasMore(level: Level): boolean {
  * Clicking an item selects it, and tells `$server.select`; the server sets the
  * selection with `setSelection`. The ancestors of the selected item have the
  * `selection-path` attribute and a `selection-path-marker` part.
+ *
+ * An item can have an icon, a decorative `<vaadin-icon>` hidden from assistive
+ * technology, and a tooltip: one `<vaadin-tooltip>` follows the item hovered or
+ * focused with the keyboard. The tooltip is hidden from assistive technology, as a
+ * tree only holds treeitems; its text is the item's `aria-describedby` instead, from a
+ * hidden copy, so the item is described whether or not the tooltip shows.
  */
 export class TfvTree extends LitElement {
   static override properties = {
@@ -181,6 +204,12 @@ export class TfvTree extends LitElement {
       transform: rotate(45deg);
     }
 
+    [part='icon'] {
+      flex: none;
+      width: var(--vaadin-tree-icon-size, 1.125em);
+      height: var(--vaadin-tree-icon-size, 1.125em);
+    }
+
     /* A dot after the label of each ancestor of the selected item */
     [part='selection-path-marker'] {
       flex: none;
@@ -236,6 +265,9 @@ export class TfvTree extends LitElement {
   /** Fetches the next page of a level when its loading row scrolls into view. */
   private _loadingRowObserver?: IntersectionObserver;
 
+  /** The key of the item hovered or focused whose tooltip is open, opening or closed by the user. */
+  private _tooltipKey: string | null = null;
+
   /** What the user has typed so far to move focus by label, lower-cased. */
   private _typed = '';
   private _typedTimeout?: ReturnType<typeof setTimeout>;
@@ -265,6 +297,7 @@ export class TfvTree extends LitElement {
     this._loadingRowObserver = undefined;
     clearTimeout(this._typedTimeout);
     this._typed = '';
+    this._hideTooltip();
     super.disconnectedCallback();
   }
 
@@ -355,6 +388,7 @@ export class TfvTree extends LitElement {
     } else {
       this.removeAttribute('aria-busy');
     }
+    this._updateTooltip();
     const observer = this._loadingRowObserver;
     if (observer) {
       observer.disconnect();
@@ -372,6 +406,9 @@ export class TfvTree extends LitElement {
         @focusin=${this._onFocusIn}
         @focusout=${this._onFocusOut}
         @click=${this._onClick}
+        @mouseover=${this._onMouseOver}
+        @mouseleave=${this._onMouseLeave}
+        @mousedown=${this._closeTooltip}
       >
         ${repeat(
           rows,
@@ -379,6 +416,15 @@ export class TfvTree extends LitElement {
           (row) => (row.kind === 'item' ? this._renderItem(row, tabbableKey) : this._renderLoading(row)),
         )}
       </div>
+      <div hidden>
+        ${rows.map((row) =>
+          row.kind === 'item' && row.node.item.tooltip
+            ? html`<span id=${this._descriptionId(row.node.item.key)}>${row.node.item.tooltip}</span>`
+            : nothing,
+        )}
+      </div>
+      <!-- A tree only holds treeitems: the tooltip is for the eyes, the hidden copies above describe the items -->
+      <vaadin-tooltip manual aria-hidden="true" .ariaTarget=${null}></vaadin-tooltip>
       <slot name="tooltip"></slot>
     `;
   }
@@ -398,6 +444,7 @@ export class TfvTree extends LitElement {
         aria-expanded=${item.expandable ? String(node.expanded) : nothing}
         aria-busy=${node.expanded && node.children?.loading ? 'true' : nothing}
         aria-selected=${String(selected)}
+        aria-describedby=${item.tooltip ? this._descriptionId(item.key) : nothing}
         ?expanded=${item.expandable && node.expanded}
         ?selected=${selected}
         ?selection-path=${onSelectionPath}
@@ -408,6 +455,7 @@ export class TfvTree extends LitElement {
         ${item.expandable
           ? html`<span part="toggle" aria-hidden="true"></span>`
           : html`<span part="toggle-spacer" aria-hidden="true"></span>`}
+        ${item.icon ? html`<vaadin-icon part="icon" icon=${item.icon} aria-hidden="true"></vaadin-icon>` : nothing}
         <span part="label">${item.label}</span>
         ${onSelectionPath ? html`<span part="selection-path-marker" aria-hidden="true"></span>` : nothing}
       </div>
@@ -577,6 +625,71 @@ export class TfvTree extends LitElement {
       });
   }
 
+  /** The id of the hidden copy of an item's tooltip text, which describes the item. */
+  private _descriptionId(key: string): string {
+    return `tooltip-${key}`;
+  }
+
+  private _tooltip(): Tooltip | null {
+    return this.renderRoot.querySelector<Tooltip>('vaadin-tooltip');
+  }
+
+  /** Opens the tooltip of an item, if it has one, after the delay for hover or keyboard focus. */
+  private _showTooltip(element: HTMLElement, trigger: 'hover' | 'focus'): void {
+    const key = element.dataset.key;
+    const text = key === undefined ? null : this._nodes.get(key)?.item.tooltip;
+    const tooltip = this._tooltip();
+    if (!text || !tooltip?._stateController || this.disabled) {
+      this._hideTooltip();
+      return;
+    }
+    this._tooltipKey = key!;
+    tooltip.target = element;
+    tooltip.text = text;
+    tooltip._stateController.open({ [trigger]: true });
+  }
+
+  /** Closes the tooltip, which stays closed until another item is hovered or focused. */
+  private _closeTooltip(): void {
+    this._tooltip()?._stateController?.close(true);
+  }
+
+  private _hideTooltip(immediate = true): void {
+    this._tooltipKey = null;
+    this._tooltip()?._stateController?.close(immediate);
+  }
+
+  /** Keeps the tooltip on its item as the items are rendered again, and closes it if the item is gone. */
+  private _updateTooltip(): void {
+    if (this._tooltipKey === null) {
+      return;
+    }
+    const element = this._itemElement(this._tooltipKey);
+    const text = this._nodes.get(this._tooltipKey)?.item.tooltip;
+    const tooltip = this._tooltip();
+    if (!element || !text || this.disabled) {
+      this._hideTooltip();
+    } else if (tooltip) {
+      tooltip.target = element;
+      tooltip.text = text;
+    }
+  }
+
+  /** Hovering over an item opens its tooltip; moving within the item leaves it as it is. */
+  private _onMouseOver(event: MouseEvent): void {
+    const element = (event.target as HTMLElement).closest<HTMLElement>('[role="treeitem"]');
+    if (!element) {
+      this._hideTooltip();
+    } else if (element.dataset.key !== this._tooltipKey) {
+      this._showTooltip(element, 'hover');
+    }
+  }
+
+  /** Leaving the items closes the tooltip after its hide delay, as other tooltips do. */
+  private _onMouseLeave(): void {
+    this._hideTooltip(false);
+  }
+
   private _itemElement(key: string | null): HTMLElement | null {
     return key === null
       ? null
@@ -608,10 +721,15 @@ export class TfvTree extends LitElement {
     this.$server?.select(node.item.key);
   }
 
+  /** Focusing an item with the keyboard opens its tooltip. */
   private _onFocusIn(event: FocusEvent): void {
-    const key = (event.target as HTMLElement).dataset.key;
+    const target = event.target as HTMLElement;
+    const key = target.dataset.key;
     if (key !== undefined) {
       this._focusedKey = key;
+      if (target.matches(':focus-visible')) {
+        this._showTooltip(target, 'focus');
+      }
     }
   }
 
@@ -620,6 +738,7 @@ export class TfvTree extends LitElement {
     const next = event.relatedTarget as Element | null;
     if (!next || !(this.renderRoot.contains(next) || this.contains(next))) {
       this._focusedKey = null;
+      this._hideTooltip();
     }
   }
 
@@ -627,6 +746,15 @@ export class TfvTree extends LitElement {
     const key = (event.target as HTMLElement).closest<HTMLElement>('[role="treeitem"]')?.dataset.key;
     const node = key === undefined ? undefined : this._nodes.get(key);
     if (!node || this.disabled || event.altKey || event.ctrlKey || event.metaKey) {
+      return;
+    }
+    if (event.key === 'Escape') {
+      if (this._tooltip()?.opened) {
+        // Closing the tooltip is all Escape does, so that it does not also close a dialog
+        this._closeTooltip();
+        event.preventDefault();
+        event.stopPropagation();
+      }
       return;
     }
     const visible = this._visibleNodes();

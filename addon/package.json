@@ -1,7 +1,7 @@
 {
   "name": "tree-for-vaadin-frontend-tests",
   "private": true,
-  "description": "Test tooling for the <tfv-tree> element. Not shipped: at run time Lit comes from the Vaadin app.",
+  "description": "Test tooling for the <tfv-tree> element. Not shipped: at run time Lit and the Vaadin components come from the Vaadin app.",
   "type": "module",
   "scripts": {
     "typecheck": "tsc --noEmit",
@@ -11,6 +11,7 @@
   "devDependencies": {
     "@open-wc/testing": "5.0.0",
     "@types/mocha": "10.0.10",
+    "@vaadin/tooltip": "25.3.3",
     "@web/dev-server-esbuild": "2.0.0",
     "@web/test-runner": "1.0.0",
     "@web/test-runner-playwright": "1.0.0",

@@ -35,6 +35,9 @@ public class TreeView extends Main {
         Tree<Folder> tree = new Tree<>();
         tree.setItems(data);
         tree.setItemLabelGenerator(Folder::name);
+        tree.setItemIconGenerator(folder -> "vaadin:folder");
+        // The path of a child item; a root item needs none
+        tree.setItemTooltipGenerator(folder -> data.getParent(folder) == null ? null : path(data, folder));
         tree.setAriaLabel("Folders");
         tree.setWidth("20em");
 
@@ -54,6 +57,11 @@ public class TreeView extends Main {
         Tree<CatalogDataProvider.Entry> tree = new Tree<>();
         tree.setDataProvider(new CatalogDataProvider());
         tree.setItemLabelGenerator(CatalogDataProvider.Entry::name);
+        tree.setItemIconGenerator(entry -> entry instanceof CatalogDataProvider.Category ? "vaadin:folder" : "vaadin:file");
+        // Categories tell how many products they hold; products have no tooltip
+        tree.setItemTooltipGenerator(entry -> entry instanceof CatalogDataProvider.Category category
+                ? category.productCount() + " products"
+                : null);
         tree.setAriaLabel("Catalogue");
         tree.setWidth("20em");
         tree.setHeight("20em");
@@ -86,6 +94,12 @@ public class TreeView extends Main {
 
     private static <T> String names(List<T> items, Function<T, String> name) {
         return items.stream().map(name).collect(Collectors.joining(", "));
+    }
+
+    /** The names of a folder and its ancestors, the root item first, such as "Documents / Letters". */
+    private static String path(TreeData<Folder> data, Folder folder) {
+        Folder parent = data.getParent(folder);
+        return parent == null ? folder.name() : path(data, parent) + " / " + folder.name();
     }
 
     private static Stream<Folder> descendants(TreeData<Folder> data, Folder parent) {

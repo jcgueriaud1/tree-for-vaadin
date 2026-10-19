@@ -24,6 +24,8 @@ import com.vaadin.flow.component.HasStyle;
 import com.vaadin.flow.component.ItemLabelGenerator;
 import com.vaadin.flow.component.Tag;
 import com.vaadin.flow.component.dependency.JsModule;
+import com.vaadin.flow.component.dependency.Uses;
+import com.vaadin.flow.component.icon.Icon;
 import com.vaadin.flow.component.shared.HasTooltip;
 import com.vaadin.flow.data.provider.KeyMapper;
 import com.vaadin.flow.data.provider.hierarchy.HierarchicalDataProvider;
@@ -34,6 +36,7 @@ import com.vaadin.flow.data.selection.MultiSelect;
 import com.vaadin.flow.data.selection.SingleSelect;
 import com.vaadin.flow.dom.DisabledUpdateMode;
 import com.vaadin.flow.dom.Element;
+import com.vaadin.flow.function.SerializableFunction;
 import com.vaadin.flow.shared.Registration;
 
 /**
@@ -50,11 +53,15 @@ import com.vaadin.flow.shared.Registration;
  * {@link #asSingleSelect()}. The ancestors of the selected item are marked as
  * its selection path, if the data provider implements
  * {@link HierarchicalDataProvider#getParent(Object) getParent}.
+ * <p>
+ * Each item can show an icon in front of its label, and a tooltip, from
+ * {@link #setItemIconGenerator} and {@link #setItemTooltipGenerator}.
  *
  * <pre>{@code
  * Tree<Folder> tree = new Tree<>();
  * tree.setItems(folderData);
  * tree.setItemLabelGenerator(Folder::name);
+ * tree.setItemIconGenerator(folder -> "vaadin:folder");
  * tree.setAriaLabel("Folders");
  * tree.asSingleSelect().addValueChangeListener(event -> open(event.getValue()));
  * }</pre>
@@ -64,6 +71,7 @@ import com.vaadin.flow.shared.Registration;
  */
 @Tag("tfv-tree")
 @JsModule("./tfv-tree/tfv-tree.ts")
+@Uses(Icon.class)
 public class Tree<T> extends Component
         implements HasAriaLabel, HasSize, HasStyle, HasEnabled, Focusable<Tree<T>>, HasTooltip {
 
@@ -81,11 +89,12 @@ public class Tree<T> extends Component
 
     /**
      * An item as the browser sees it: the key it refers to it by, its label,
-     * whether it has child items, whether it is expanded, whether it is the
-     * selected item and whether it is on the selection path.
+     * its icon and tooltip if any, whether it has child items, whether it is
+     * expanded, whether it is the selected item and whether it is on the
+     * selection path.
      */
-    record TreeItem(String key, String label, boolean expandable, boolean expanded, boolean selected,
-            boolean onSelectionPath) {
+    record TreeItem(String key, String label, String icon, String tooltip, boolean expandable, boolean expanded,
+            boolean selected, boolean onSelectionPath) {
     }
 
     /** A page of child items, with the number of children the parent has in all. */
@@ -95,6 +104,8 @@ public class Tree<T> extends Component
     private final KeyMapper<T> keyMapper = new KeyMapper<>();
     private HierarchicalDataProvider<T, ?> dataProvider = new TreeDataProvider<>(new TreeData<>());
     private ItemLabelGenerator<T> itemLabelGenerator = String::valueOf;
+    private SerializableFunction<T, String> itemIconGenerator = item -> null;
+    private SerializableFunction<T, String> itemTooltipGenerator = item -> null;
     private Registration dataProviderListener;
     /** The ids of the expanded items, kept across refreshes. */
     private final Set<Object> expandedIds = new HashSet<>();
@@ -167,6 +178,55 @@ public class Tree<T> extends Component
      */
     public ItemLabelGenerator<T> getItemLabelGenerator() {
         return itemLabelGenerator;
+    }
+
+    /**
+     * Sets the icon shown in front of each item's label, by its name in an
+     * icon set, such as {@code vaadin:folder}, shown with
+     * {@code <vaadin-icon>}. The {@code vaadin} icon set comes with the tree;
+     * other icon sets must be loaded by the app. Icons are
+     * decorative: they are hidden from assistive technology, and the label
+     * stays the accessible name of the item. By default items have no icon.
+     *
+     * @param itemIconGenerator
+     *            gives the icon name of an item, or {@code null} for no icon;
+     *            not {@code null}
+     */
+    public void setItemIconGenerator(SerializableFunction<T, String> itemIconGenerator) {
+        this.itemIconGenerator = Objects.requireNonNull(itemIconGenerator, "itemIconGenerator");
+        refresh();
+    }
+
+    /**
+     * Gets the icon shown in front of each item's label.
+     *
+     * @return the item icon generator, never {@code null}
+     */
+    public SerializableFunction<T, String> getItemIconGenerator() {
+        return itemIconGenerator;
+    }
+
+    /**
+     * Sets the tooltip of each item, shown when the user hovers over the item
+     * or focuses it with the keyboard. The tooltip is also the accessible
+     * description of the item. By default items have no tooltip.
+     *
+     * @param itemTooltipGenerator
+     *            gives the tooltip text of an item, or {@code null} or an
+     *            empty string for no tooltip; not {@code null}
+     */
+    public void setItemTooltipGenerator(SerializableFunction<T, String> itemTooltipGenerator) {
+        this.itemTooltipGenerator = Objects.requireNonNull(itemTooltipGenerator, "itemTooltipGenerator");
+        refresh();
+    }
+
+    /**
+     * Gets the tooltip of each item.
+     *
+     * @return the item tooltip generator, never {@code null}
+     */
+    public SerializableFunction<T, String> getItemTooltipGenerator() {
+        return itemTooltipGenerator;
     }
 
     /**
@@ -492,7 +552,8 @@ public class Tree<T> extends Component
                 .fetchChildren(new HierarchicalQuery<>(offset, limit, List.of(), null, null, parent))
                 .map(item -> {
                     Object id = provider.getId(item);
-                    return new TreeItem(keyMapper.key(item), itemLabelGenerator.apply(item), provider.hasChildren(item),
+                    return new TreeItem(keyMapper.key(item), itemLabelGenerator.apply(item),
+                            itemIconGenerator.apply(item), itemTooltipGenerator.apply(item), provider.hasChildren(item),
                             isExpanded(item), Objects.equals(id, idOf(selectedItem)), selectionPathIds.contains(id));
                 })
                 .toList();
