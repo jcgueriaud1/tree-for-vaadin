@@ -14,6 +14,11 @@ type FakeServer = TreeServer & {
   calls: unknown[][];
   /** The setExpanded calls made, as [key, expanded]. */
   expansions: unknown[][];
+  /** The keys of the select calls made. */
+  selections: string[];
+  /** The key of the item the server has selected, and the keys of its ancestors. */
+  selectedKey: string | null;
+  selectionPath: string[];
   /** While true, fetches wait until release() is called. */
   hold: boolean;
   release(): void;
@@ -39,6 +44,9 @@ function serverWith(roots: FakeItem[]): FakeServer {
   const server: FakeServer = {
     calls: [],
     expansions: [],
+    selections: [],
+    selectedKey: null,
+    selectionPath: [],
     hold: false,
     release() {
       const resolve = waiting;
@@ -53,14 +61,18 @@ function serverWith(roots: FakeItem[]): FakeServer {
       const level = children(parentKey);
       const items = level.slice(offset, offset + limit).map((item, i) => {
         const key = parentKey === null ? String(offset + i) : `${parentKey}/${offset + i}`;
+        const selection = { selected: key === server.selectedKey, onSelectionPath: server.selectionPath.includes(key) };
         return typeof item === 'string'
-          ? { key, label: item, expandable: false, expanded: false }
-          : { key, label: item[0], expandable: item[1].length > 0, expanded: item[2] ?? false };
+          ? { key, label: item, expandable: false, expanded: false, ...selection }
+          : { key, label: item[0], expandable: item[1].length > 0, expanded: item[2] ?? false, ...selection };
       });
       return { items, size: level.length };
     },
     setExpanded(key, expanded) {
       server.expansions.push([key, expanded]);
+    },
+    select(key) {
+      server.selections.push(key);
     },
   };
   return server;
@@ -102,6 +114,23 @@ function item(tree: TfvTree, label: string): HTMLElement {
 
 function loadingRows(tree: TfvTree): HTMLElement[] {
   return Array.from(tree.shadowRoot!.querySelectorAll<HTMLElement>('[part="loading"]'));
+}
+
+async function clickLabel(tree: TfvTree, label: string): Promise<void> {
+  item(tree, label).querySelector<HTMLElement>('[part="label"]')!.click();
+  await settle(tree);
+}
+
+function selectedLabels(tree: TfvTree): string[] {
+  return treeItems(tree)
+    .filter((element) => element.getAttribute('aria-selected') === 'true')
+    .map((element) => element.textContent!.trim());
+}
+
+function selectionPathLabels(tree: TfvTree): string[] {
+  return treeItems(tree)
+    .filter((element) => element.hasAttribute('selection-path'))
+    .map((element) => element.textContent!.trim());
 }
 
 async function clickToggle(tree: TfvTree, label: string): Promise<void> {
@@ -317,6 +346,227 @@ describe('tfv-tree', () => {
       await clickToggle(tree, 'Documents');
 
       await expect(tree).to.be.accessible();
+    });
+  });
+
+  describe('selection', () => {
+    it('marks every item as selectable, one at a time', async () => {
+      const tree = await treeWith(serverWith(FOLDERS));
+
+      expect(treeItems(tree).map((element) => element.getAttribute('aria-selected'))).to.deep.equal([
+        'false',
+        'false',
+        'false',
+      ]);
+      expect(tree.hasAttribute('aria-multiselectable')).to.be.false;
+    });
+
+    it('selects an item when the user clicks it, and tells the server', async () => {
+      const server = serverWith(FOLDERS);
+      const tree = await treeWith(server);
+
+      await clickLabel(tree, 'Music');
+
+      expect(selectedLabels(tree)).to.deep.equal(['Music']);
+      expect(item(tree, 'Music').hasAttribute('selected')).to.be.true;
+      expect(server.selections).to.deep.equal(['1']);
+    });
+
+    it('keeps the selected item selected when the user clicks it again', async () => {
+      const server = serverWith(FOLDERS);
+      const tree = await treeWith(server);
+      await clickLabel(tree, 'Music');
+
+      await clickLabel(tree, 'Music');
+
+      expect(selectedLabels(tree)).to.deep.equal(['Music']);
+      expect(server.selections).to.deep.equal(['1']);
+    });
+
+    it('selects parents too, but not by clicking their toggle', async () => {
+      const server = serverWith(FOLDERS);
+      const tree = await treeWith(server);
+
+      await clickToggle(tree, 'Documents');
+      expect(selectedLabels(tree)).to.be.empty;
+
+      await clickLabel(tree, 'Documents');
+      expect(selectedLabels(tree)).to.deep.equal(['Documents']);
+    });
+
+    it('marks the ancestors of the item the user selects as its selection path', async () => {
+      const tree = await treeWith(serverWith(FOLDERS));
+      await clickToggle(tree, 'Documents');
+      await clickToggle(tree, 'Letters');
+
+      await clickLabel(tree, '2026');
+
+      expect(selectionPathLabels(tree)).to.deep.equal(['Documents', 'Letters']);
+      expect(item(tree, 'Documents').getAttribute('aria-selected')).to.equal('false');
+      expect(item(tree, 'Documents').querySelector('[part="selection-path-marker"]')).to.exist;
+      expect(item(tree, '2026').querySelector('[part="selection-path-marker"]')).to.not.exist;
+    });
+
+    it('keeps the selection when the parent of the selected item is collapsed, showing it on the parent', async () => {
+      const server = serverWith(FOLDERS);
+      const tree = await treeWith(server);
+      await clickToggle(tree, 'Documents');
+      await clickLabel(tree, 'Letters');
+
+      await clickToggle(tree, 'Documents');
+      expect(selectionPathLabels(tree)).to.deep.equal(['Documents']);
+
+      await clickToggle(tree, 'Documents');
+      expect(selectedLabels(tree)).to.deep.equal(['Letters']);
+      expect(server.selections).to.deep.equal(['0/1']);
+    });
+
+    it('shows the selection the server sets, without expanding anything', async () => {
+      const tree = await treeWith(serverWith(FOLDERS));
+
+      tree.setSelection(null, '0');
+      await tree.updateComplete;
+      expect(selectedLabels(tree)).to.be.empty;
+      expect(selectionPathLabels(tree)).to.deep.equal(['Documents']);
+      expect(labels(tree)).to.deep.equal(['Documents', 'Music', 'Pictures']);
+
+      tree.setSelection('2');
+      await tree.updateComplete;
+      expect(selectedLabels(tree)).to.deep.equal(['Pictures']);
+      expect(selectionPathLabels(tree)).to.be.empty;
+
+      tree.setSelection(null);
+      await tree.updateComplete;
+      expect(selectedLabels(tree)).to.be.empty;
+    });
+
+    it('shows the selection on items as they are fetched', async () => {
+      const server = serverWith(FOLDERS);
+      server.selectedKey = '0/1/0';
+      server.selectionPath = ['0', '0/1'];
+      const tree = await treeWith(server);
+
+      expect(selectionPathLabels(tree)).to.deep.equal(['Documents']);
+      await clickToggle(tree, 'Documents');
+      await clickToggle(tree, 'Letters');
+
+      expect(selectionPathLabels(tree)).to.deep.equal(['Documents', 'Letters']);
+      expect(selectedLabels(tree)).to.deep.equal(['2025']);
+    });
+
+    it('does not select while disabled or read-only', async () => {
+      const server = serverWith(FOLDERS);
+      const tree = await treeWith(server);
+
+      tree.disabled = true;
+      await tree.updateComplete;
+      await clickLabel(tree, 'Music');
+      tree.disabled = false;
+      tree.readonly = true;
+      await tree.updateComplete;
+      await clickLabel(tree, 'Music');
+
+      expect(selectedLabels(tree)).to.be.empty;
+      expect(server.selections).to.be.empty;
+    });
+
+    it('has no accessibility violations with a selection', async () => {
+      const tree = await treeWith(serverWith(FOLDERS));
+      await clickToggle(tree, 'Documents');
+      await clickLabel(tree, 'Letters');
+
+      await expect(tree).to.be.accessible();
+    });
+  });
+
+  describe('scrolling to an item', () => {
+    // The server expands the ancestors before it asks to scroll
+    const MANY: FakeItem[] = [
+      'Gift cards',
+      ['Products', Array.from({ length: 25 }, (_, i) => `Product ${i}`), true],
+      'Services',
+    ];
+
+    async function smallTree(server: TreeServer): Promise<TfvTree> {
+      return treeWith(server, (element) => {
+        element.pageSize = 10;
+        element.style.height = '100px';
+        element.style.overflow = 'auto';
+      });
+    }
+
+    it('fetches pages of each level until the item is there, then scrolls it into view', async () => {
+      const server = serverWith(MANY);
+      const tree = await smallTree(server);
+
+      await tree.scrollToItem('1', '1/22');
+      await settle(tree);
+
+      expect(item(tree, 'Products').getAttribute('aria-expanded')).to.equal('true');
+      expect(server.calls.filter((call) => call[0] === '1')).to.deep.equal([
+        ['1', 0, 10],
+        ['1', 10, 10],
+        ['1', 20, 10],
+      ]);
+      expect(server.expansions).to.be.empty;
+      const treeBox = tree.getBoundingClientRect();
+      const itemBox = item(tree, 'Product 22').getBoundingClientRect();
+      expect(itemBox.top).to.be.at.least(treeBox.top);
+      expect(itemBox.bottom).to.be.at.most(treeBox.bottom);
+      expect(selectedLabels(tree)).to.be.empty;
+    });
+
+    it('waits for the root items to be fetched', async () => {
+      const server = serverWith(MANY);
+      server.hold = true;
+      const tree = await smallTree(server);
+
+      const scrolled = tree.scrollToItem('1', '1/5');
+      server.hold = false;
+      server.release();
+      await scrolled;
+      await settle(tree);
+
+      expect(labels(tree)).to.include('Product 5');
+    });
+
+    it('gives up on an item that is not there', async () => {
+      const tree = await smallTree(serverWith(MANY));
+
+      await tree.scrollToItem('1', '1/99');
+
+      expect(labels(tree)).to.include('Product 24');
+    });
+
+    it('gives up when the tree is refreshed meanwhile, as the keys are stale', async () => {
+      const server = serverWith(MANY);
+      const tree = await smallTree(server);
+      const fetches = server.calls.length;
+
+      const scrolled = tree.scrollToItem('1', '1/22');
+      tree.refresh();
+      await scrolled;
+      await settle(tree);
+
+      expect(server.calls.slice(fetches).filter((call) => call[0] === '1' && call[1] !== 0)).to.be.empty;
+    });
+
+    it('gives up when the user collapses an ancestor meanwhile, leaving it collapsed', async () => {
+      const server = serverWith(MANY);
+      server.hold = true;
+      const tree = await smallTree(server);
+      server.release();
+      await settle(tree);
+
+      const scrolled = tree.scrollToItem('1', '1/22');
+      await clickToggle(tree, 'Products');
+      server.hold = false;
+      server.release();
+      await scrolled;
+      await settle(tree);
+
+      expect(item(tree, 'Products').getAttribute('aria-expanded')).to.equal('false');
+      expect(server.expansions).to.deep.equal([['1', false]]);
     });
   });
 

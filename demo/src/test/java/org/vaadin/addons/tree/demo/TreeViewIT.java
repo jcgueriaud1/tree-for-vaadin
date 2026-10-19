@@ -125,9 +125,115 @@ class TreeViewIT {
     }
 
     @Test
+    void clickingAnItemSelectsItAndMovesFocusThere() {
+        Locator items = folders().getByRole(AriaRole.TREEITEM);
+        assertThat(items).hasCount(3);
+        assertThat(folders()).not().hasAttribute("aria-multiselectable", "true");
+        assertEquals(List.of("false", "false", "false"),
+                items.all().stream().map(item -> item.getAttribute("aria-selected")).toList());
+
+        item(folders(), "Music").click();
+
+        assertThat(item(folders(), "Music")).hasAttribute("aria-selected", "true");
+        assertThat(item(folders(), "Music")).isFocused();
+        assertThat(item(folders(), "Documents")).hasAttribute("aria-selected", "false");
+        assertThat(status()).hasText("Selected Music by the user");
+
+        item(folders(), "Documents").click();
+
+        assertThat(item(folders(), "Documents")).hasAttribute("aria-selected", "true");
+        assertThat(item(folders(), "Music")).hasAttribute("aria-selected", "false");
+        assertThat(item(folders(), "Documents")).hasAttribute("aria-expanded", "false");
+        assertThat(status()).hasText("Selected Documents by the user");
+    }
+
+    @Test
+    void clickingTheSelectedItemAgainKeepsItSelected() {
+        item(folders(), "Music").click();
+        item(folders(), "Documents").locator("[part=toggle]").click();
+        assertThat(status()).hasText("Expanded Documents by the user");
+
+        item(folders(), "Music").click();
+
+        assertThat(item(folders(), "Music")).hasAttribute("aria-selected", "true");
+        assertThat(status()).hasText("Expanded Documents by the user");
+    }
+
+    @Test
+    void theSelectionPathMarksTheAncestorsOfTheSelectedItemExpandedOrCollapsed() {
+        item(folders(), "Documents").locator("[part=toggle]").click();
+        item(folders(), "Letters").locator("[part=toggle]").click();
+
+        item(folders(), "2026").click();
+
+        assertThat(item(folders(), "2026")).hasAttribute("aria-selected", "true");
+        assertOnSelectionPath("Documents");
+        assertOnSelectionPath("Letters");
+        assertThat(item(folders(), "2026").locator("[part=selection-path-marker]")).hasCount(0);
+        assertThat(item(folders(), "Music").locator("[part=selection-path-marker]")).hasCount(0);
+
+        item(folders(), "Documents").locator("[part=toggle]").click();
+
+        assertThat(folders().getByRole(AriaRole.TREEITEM)).hasText(new String[] { "Documents", "Music", "Pictures" });
+        assertOnSelectionPath("Documents");
+        assertThat(status()).hasText("Collapsed Documents by the user");
+
+        item(folders(), "Documents").locator("[part=toggle]").click();
+
+        assertThat(item(folders(), "2026")).hasAttribute("aria-selected", "true");
+    }
+
+    @Test
+    void theServerSelectsAnItemWithoutExpandingItsAncestorsAndClearsTheSelection() {
+        page.getByRole(AriaRole.BUTTON, new Page.GetByRoleOptions().setName("Select 2026")).click();
+
+        assertThat(status()).hasText("Selected 2026 by the server");
+        assertThat(folders().getByRole(AriaRole.TREEITEM)).hasText(new String[] { "Documents", "Music", "Pictures" });
+        assertOnSelectionPath("Documents");
+
+        item(folders(), "Documents").locator("[part=toggle]").click();
+        assertOnSelectionPath("Letters");
+        item(folders(), "Letters").locator("[part=toggle]").click();
+        assertThat(item(folders(), "2026")).hasAttribute("aria-selected", "true");
+
+        page.getByRole(AriaRole.BUTTON, new Page.GetByRoleOptions().setName("Clear selection")).click();
+
+        assertThat(status()).hasText("Cleared the selection by the server");
+        assertThat(folders().locator("[aria-selected=true]")).hasCount(0);
+        assertThat(folders().locator("[selection-path]")).hasCount(0);
+    }
+
+    @Test
+    void scrollingToAnItemExpandsItsAncestorsWithoutSelectingIt() {
+        page.getByRole(AriaRole.BUTTON, new Page.GetByRoleOptions().setName("Show 2026")).click();
+
+        assertThat(item(folders(), "2026")).isInViewport();
+        assertThat(item(folders(), "Letters")).hasAttribute("aria-expanded", "true");
+        assertThat(status()).hasText("Expanded Documents, Letters by the server");
+        assertThat(folders().locator("[aria-selected=true]")).hasCount(0);
+    }
+
+    @Test
+    void scrollingToAnItemWhoseAncestorsWereNeverFetchedFetchesThePagesOnTheWay() {
+        Locator catalogue = page.getByRole(AriaRole.TREE, new Page.GetByRoleOptions().setName("Catalogue"));
+
+        page.getByRole(AriaRole.BUTTON, new Page.GetByRoleOptions().setName("Show and select Books item 600")).click();
+
+        Locator product = item(catalogue, "Books item 600");
+        assertThat(product).isInViewport();
+        assertThat(product).hasAttribute("aria-selected", "true");
+        assertThat(product).hasAttribute("aria-posinset", "600");
+        assertThat(item(catalogue, "Books")).hasAttribute("aria-expanded", "true");
+        assertThat(item(catalogue, "Books")).hasAttribute("selection-path", "");
+        assertThat(page.getByRole(AriaRole.STATUS).nth(1)).hasText("Selected Books item 600 by the server");
+    }
+
+    @Test
     void thePageHasNoAccessibilityViolations() {
         page.getByRole(AriaRole.BUTTON, new Page.GetByRoleOptions().setName("Expand all")).click();
         assertThat(item(folders(), "Holidays")).isVisible();
+        item(folders(), "2026").click();
+        assertOnSelectionPath("Letters");
 
         // Vaadin's connection indicator sits outside any landmark; it is not ours to fix
         AxeResults results = new AxeBuilder(page).exclude(List.of("vaadin-connection-indicator")).analyze();
@@ -136,6 +242,16 @@ class TreeViewIT {
                 .map(violation -> violation.getId() + ": " + violation.getHelp() + " "
                         + violation.getNodes().stream().map(node -> node.getTarget().toString()).toList())
                 .toList());
+    }
+
+    private void assertOnSelectionPath(String label) {
+        assertThat(item(folders(), label)).hasAttribute("selection-path", "");
+        assertThat(item(folders(), label).locator("[part=selection-path-marker]")).isVisible();
+        assertThat(item(folders(), label)).hasAttribute("aria-selected", "false");
+    }
+
+    private Locator status() {
+        return page.getByRole(AriaRole.STATUS).first();
     }
 
     private Locator folders() {
