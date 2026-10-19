@@ -201,6 +201,16 @@ selected item takes the system's `Highlight` colors.
 The Lit element (`addon/src/main/resources/META-INF/resources/frontend/tfv-tree/`) ships inside the jar and is
 loaded with `@JsModule`. `addon/package.json` only holds test tooling: at run time Lit, `<vaadin-icon>`, `<vaadin-tooltip>` and Vaadin's live region (`@vaadin/a11y-base`) come from the Vaadin app.
 
+### Hosting the demo
+
+The demo runs on [Render](https://render.com)'s free plan from the `Dockerfile`, which builds the production
+bundle and runs it on a small JRE image sized for the free instance (512 MB, 0.1 CPU).
+[`render.yaml`](render.yaml) is the Blueprint: on Render, *New > Blueprint* and pick this repository. It
+redeploys when `main` changes and the Test workflow passes. Free instances sleep after 15 minutes without
+traffic, and take about a minute to wake up.
+
+To try the image locally: `docker build -t tree-for-vaadin-demo . && docker run -p 8080:8080 tree-for-vaadin-demo`.
+
 ## License
 
 [Apache License 2.0](LICENSE)

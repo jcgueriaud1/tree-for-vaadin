@@ -1,0 +1,13 @@
+# Render Blueprint: the demo (demo/) as a free web service built from the
+# Dockerfile, redeployed when main changes and the Test workflow passes.
+# Free instances sleep after 15 minutes without traffic.
+services:
+  - type: web
+    name: tree-for-vaadin
+    runtime: docker
+    plan: free
+    region: frankfurt
+    branch: main
+    dockerfilePath: ./Dockerfile
+    autoDeployTrigger: checksPass
+    healthCheckPath: /
