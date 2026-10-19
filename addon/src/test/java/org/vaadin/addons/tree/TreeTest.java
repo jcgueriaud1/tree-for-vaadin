@@ -3,26 +3,32 @@ package org.vaadin.addons.tree;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotEquals;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.List;
 import java.util.stream.IntStream;
+import java.util.stream.Stream;
 
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
 import com.vaadin.browserless.BrowserlessTest;
+import com.vaadin.flow.component.AbstractField.ComponentValueChangeEvent;
 import com.vaadin.flow.component.ComponentEvent;
 import com.vaadin.flow.component.UI;
 import com.vaadin.flow.component.internal.PendingJavaScriptInvocation;
+import com.vaadin.flow.data.provider.hierarchy.AbstractBackEndHierarchicalDataProvider;
+import com.vaadin.flow.data.provider.hierarchy.HierarchicalQuery;
 import com.vaadin.flow.data.provider.hierarchy.TreeData;
 import com.vaadin.flow.data.provider.hierarchy.TreeDataProvider;
 import org.vaadin.addons.tree.Tree.ItemPage;
 import org.vaadin.addons.tree.Tree.TreeItem;
 
-/** The server side of the Tree: what the browser gets when it fetches items, and expanding and collapsing them. */
+/** The server side of the Tree: what the browser gets when it fetches items, expanding and collapsing, and selection. */
 class TreeTest extends BrowserlessTest {
 
     record Folder(String name) {
@@ -98,6 +104,45 @@ class TreeTest extends BrowserlessTest {
         plain.setDataProvider(new TreeDataProvider<>(data));
 
         assertEquals(List.of("Alpha", "Beta"), labels(plain.fetchChildren(null, 0, 50)));
+    }
+
+    @Test
+    void itemsHaveNoIconOrTooltipUnlessGenerated() {
+        TreeItem documents = tree.fetchChildren(null, 0, 50).items().get(0);
+
+        assertNull(documents.icon());
+        assertNull(documents.tooltip());
+    }
+
+    @Test
+    void theIconAndTooltipOfAnItemComeFromTheGenerators() {
+        tree.setItemIconGenerator(folder -> folder.equals(docs) ? "vaadin:folder" : null);
+        tree.setItemTooltipGenerator(folder -> folder.equals(music) ? null : folder.name() + " folder");
+
+        List<TreeItem> items = tree.fetchChildren(null, 0, 50).items();
+
+        assertEquals("vaadin:folder", items.get(0).icon());
+        assertEquals("Documents folder", items.get(0).tooltip());
+        assertNull(items.get(1).icon(), "null means no icon");
+        assertNull(items.get(1).tooltip(), "null means no tooltip");
+        assertEquals("Documents", items.get(0).label(), "the label is left as it is");
+    }
+
+    @Test
+    void settingAGeneratorHasTheBrowserFetchTheItemsAgain() {
+        tree.fetchChildren(null, 0, 50);
+        calls("refresh");
+
+        tree.setItemIconGenerator(folder -> "vaadin:folder");
+        assertEquals(1, calls("refresh").size());
+        tree.setItemTooltipGenerator(Folder::name);
+        assertEquals(1, calls("refresh").size());
+    }
+
+    @Test
+    void theGeneratorsAreNotNull() {
+        assertThrows(NullPointerException.class, () -> tree.setItemIconGenerator(null));
+        assertThrows(NullPointerException.class, () -> tree.setItemTooltipGenerator(null));
     }
 
     @Test
@@ -197,9 +242,9 @@ class TreeTest extends BrowserlessTest {
         String documentsKey = tree.fetchChildren(null, 0, 50).items().get(0).key();
         List<ComponentEvent<?>> events = recordEvents();
 
-        tree.setExpanded(documentsKey, true);
+        tree.setExpanded(true, documentsKey);
         assertTrue(tree.isExpanded(docs));
-        tree.setExpanded(documentsKey, false);
+        tree.setExpanded(false, documentsKey);
         assertFalse(tree.isExpanded(docs));
 
         assertEquals(2, events.size());
@@ -210,10 +255,22 @@ class TreeTest extends BrowserlessTest {
     }
 
     @Test
+    void theUserExpandingSiblingsFiresOneEventForThemAll() {
+        List<String> keys = tree.fetchChildren(null, 0, 50).items().stream().map(TreeItem::key).toList();
+        List<ComponentEvent<?>> events = recordEvents();
+
+        tree.setExpanded(true, keys.get(0), "unknown", keys.get(1));
+
+        assertEquals(1, events.size());
+        assertEquals(List.of(docs, music), ((ExpandEvent<?>) events.get(0)).getItems());
+        assertTrue(events.get(0).isFromClient());
+    }
+
+    @Test
     void theUserExpandingAnItemNoLongerKnownIsIgnored() {
         List<ComponentEvent<?>> events = recordEvents();
 
-        tree.setExpanded("unknown", true);
+        tree.setExpanded(true, "unknown");
 
         assertTrue(events.isEmpty());
     }
@@ -287,6 +344,231 @@ class TreeTest extends BrowserlessTest {
         assertThrows(IllegalArgumentException.class, () -> tree.setPageSize(Tree.MAX_PAGE_SIZE + 1));
     }
 
+    @Test
+    void theTreeSelectsASingleItemAndNothingAtFirst() {
+        assertEquals(Tree.SelectionMode.SINGLE, tree.getSelectionMode());
+        assertNull(tree.asSingleSelect().getValue());
+        assertTrue(tree.asSingleSelect().isEmpty());
+    }
+
+    @Test
+    void thereIsNoMultiSelectInSingleSelectionMode() {
+        tree.setSelectionMode(Tree.SelectionMode.SINGLE);
+
+        assertThrows(IllegalStateException.class, tree::asMultiSelect);
+    }
+
+    @Test
+    void anyItemCanBeSelectedFromTheServerParentsToo() {
+        List<ComponentValueChangeEvent<Tree<Folder>, Folder>> events = recordValueChanges();
+
+        tree.asSingleSelect().setValue(letters);
+        tree.asSingleSelect().setValue(docs);
+
+        assertEquals(docs, tree.asSingleSelect().getValue());
+        assertEquals(2, events.size());
+        assertNull(events.get(0).getOldValue());
+        assertEquals(letters, events.get(0).getValue());
+        assertEquals(letters, events.get(1).getOldValue());
+        assertEquals(docs, events.get(1).getValue());
+        assertFalse(events.get(1).isFromClient());
+        assertEquals(tree, events.get(1).getSource());
+        assertEquals(tree.asSingleSelect(), events.get(1).getHasValue());
+    }
+
+    @Test
+    void theServerClearsTheSelectionWithNull() {
+        tree.asSingleSelect().setValue(docs);
+        List<ComponentValueChangeEvent<Tree<Folder>, Folder>> events = recordValueChanges();
+
+        tree.asSingleSelect().setValue(null);
+
+        assertNull(tree.asSingleSelect().getValue());
+        assertEquals(1, events.size());
+        assertEquals(docs, events.get(0).getOldValue());
+    }
+
+    @Test
+    void selectingTheSelectedItemAgainChangesNothing() {
+        tree.asSingleSelect().setValue(docs);
+        List<ComponentValueChangeEvent<Tree<Folder>, Folder>> events = recordValueChanges();
+
+        tree.asSingleSelect().setValue(docs);
+        tree.select(key(docs));
+
+        assertTrue(events.isEmpty());
+    }
+
+    @Test
+    void theUserSelectingAnItemFiresAValueChangeFromTheClient() {
+        List<ComponentValueChangeEvent<Tree<Folder>, Folder>> events = recordValueChanges();
+
+        tree.select(key(music));
+
+        assertEquals(music, tree.asSingleSelect().getValue());
+        assertEquals(1, events.size());
+        assertTrue(events.get(0).isFromClient());
+    }
+
+    @Test
+    void theUserSelectingAnItemNoLongerKnownIsIgnored() {
+        tree.asSingleSelect().setValue(docs);
+
+        tree.select("unknown");
+
+        assertEquals(docs, tree.asSingleSelect().getValue());
+    }
+
+    @Test
+    void theUserCannotSelectWhileReadOnly() {
+        String musicKey = key(music);
+        tree.asSingleSelect().setReadOnly(true);
+        setSelectionCalls();
+
+        tree.select(musicKey);
+
+        assertNull(tree.asSingleSelect().getValue());
+        assertEquals(List.of(Arrays.asList((Object) null)), setSelectionCalls(), "the browser is told to undo it");
+    }
+
+    @Test
+    void selectingFromTheServerExpandsNothing() {
+        tree.asSingleSelect().setValue(letters);
+
+        assertFalse(tree.isExpanded(docs));
+    }
+
+    @Test
+    void theSelectedItemAndItsSelectionPathComeMarkedWhenTheBrowserFetchesThem() {
+        tree.asSingleSelect().setValue(letters);
+
+        TreeItem documents = tree.fetchChildren(null, 0, 50).items().get(0);
+        TreeItem lettersItem = tree.fetchChildren(documents.key(), 0, 50).items().get(0);
+
+        assertTrue(documents.onSelectionPath());
+        assertFalse(documents.selected());
+        assertTrue(lettersItem.selected());
+        assertFalse(lettersItem.onSelectionPath());
+        assertFalse(tree.fetchChildren(null, 0, 50).items().get(1).onSelectionPath(), "Music is not an ancestor");
+    }
+
+    @Test
+    void selectingTellsTheBrowserTheKeysOfTheItemsItHas() {
+        String documentsKey = key(docs);
+        setSelectionCalls();
+
+        tree.asSingleSelect().setValue(letters);
+        String lettersKey = tree.fetchChildren(documentsKey, 0, 50).items().get(0).key();
+        tree.asSingleSelect().setValue(null);
+        tree.select(lettersKey);
+
+        assertEquals(List.of(Arrays.asList(null, documentsKey), Arrays.asList((Object) null),
+                List.of(lettersKey, documentsKey)), setSelectionCalls());
+    }
+
+    @Test
+    void collapsingAndExpandingKeepTheSelection() {
+        tree.expand(docs);
+        tree.asSingleSelect().setValue(letters);
+
+        tree.collapse(docs);
+
+        assertEquals(letters, tree.asSingleSelect().getValue());
+        assertTrue(tree.fetchChildren(null, 0, 50).items().get(0).onSelectionPath());
+    }
+
+    @Test
+    void theSelectionStaysWhenTheDataIsRefreshedAndGoesWithNewItems() {
+        tree.asSingleSelect().setValue(letters);
+
+        tree.getDataProvider().refreshAll();
+        assertEquals(letters, tree.asSingleSelect().getValue());
+
+        List<ComponentValueChangeEvent<Tree<Folder>, Folder>> events = recordValueChanges();
+        tree.setItems(new TreeData<>());
+        assertNull(tree.asSingleSelect().getValue());
+        assertEquals(1, events.size());
+        assertFalse(events.get(0).isFromClient());
+    }
+
+    @Test
+    void withoutGetParentThereIsNoSelectionPath() {
+        Tree<Folder> backend = new Tree<>();
+        backend.setDataProvider(new BackendWithoutGetParent());
+
+        backend.asSingleSelect().setValue(letters);
+
+        TreeItem documents = backend.fetchChildren(null, 0, 50).items().get(0);
+        assertFalse(documents.onSelectionPath());
+        assertTrue(backend.fetchChildren(documents.key(), 0, 50).items().get(0).selected());
+    }
+
+    @Test
+    void scrollingToAnItemExpandsItsAncestorsAndTellsTheBrowserTheirKeys() {
+        Folder year = new Folder("2026");
+        TreeData<Folder> data = new TreeData<>();
+        data.addRootItems(docs);
+        data.addItem(docs, letters);
+        data.addItem(letters, year);
+        tree.setItems(data);
+        List<ComponentEvent<?>> events = recordEvents();
+        scrollToItemCalls();
+
+        tree.scrollToItem(year);
+
+        assertTrue(tree.isExpanded(docs));
+        assertTrue(tree.isExpanded(letters));
+        assertEquals(List.of(docs, letters), ((ExpandEvent<?>) events.get(0)).getItems());
+        assertNull(tree.asSingleSelect().getValue(), "scrolling selects nothing");
+        String documentsKey = key(docs);
+        String lettersKey = tree.fetchChildren(documentsKey, 0, 50).items().get(0).key();
+        String yearKey = tree.fetchChildren(lettersKey, 0, 50).items().get(0).key();
+        assertEquals(List.of(List.of(documentsKey, lettersKey, yearKey)), scrollToItemCalls());
+    }
+
+    @Test
+    void scrollingToAnItemNeedsGetParent() {
+        Tree<Folder> backend = new Tree<>();
+        backend.setDataProvider(new BackendWithoutGetParent());
+
+        assertThrows(UnsupportedOperationException.class, () -> backend.scrollToItem(letters));
+    }
+
+    /** Documents holding Letters, from a backend that cannot tell the parent of an item. */
+    private class BackendWithoutGetParent extends AbstractBackEndHierarchicalDataProvider<Folder, Void> {
+
+        @Override
+        public int getChildCount(HierarchicalQuery<Folder, Void> query) {
+            return (int) children(query.getParent()).count();
+        }
+
+        @Override
+        public boolean hasChildren(Folder item) {
+            return item.equals(docs);
+        }
+
+        @Override
+        protected Stream<Folder> fetchChildrenFromBackEnd(HierarchicalQuery<Folder, Void> query) {
+            return children(query.getParent()).skip(query.getOffset()).limit(query.getLimit());
+        }
+
+        private Stream<Folder> children(Folder parent) {
+            return parent == null ? Stream.of(docs) : parent.equals(docs) ? Stream.of(letters) : Stream.empty();
+        }
+    }
+
+    /** The key of a root item, fetching the root items for it. */
+    private String key(Folder rootItem) {
+        return tree.fetchChildren(null, 0, 50).items().stream()
+                .filter(item -> item.label().equals(rootItem.name())).findFirst().orElseThrow().key();
+    }
+
+    private List<ComponentValueChangeEvent<Tree<Folder>, Folder>> recordValueChanges() {
+        List<ComponentValueChangeEvent<Tree<Folder>, Folder>> events = new ArrayList<>();
+        tree.asSingleSelect().addValueChangeListener(events::add);
+        return events;
+    }
+
     private List<ComponentEvent<?>> recordEvents() {
         List<ComponentEvent<?>> events = new ArrayList<>();
         tree.addExpandListener(events::add);
@@ -294,12 +576,24 @@ class TreeTest extends BrowserlessTest {
         return events;
     }
 
-    /** The arguments of the setItemExpanded calls the server has queued for the browser, taking them off the queue. */
     private static List<List<Object>> setItemExpandedCalls() {
+        return calls("setItemExpanded");
+    }
+
+    private static List<List<Object>> setSelectionCalls() {
+        return calls("setSelection");
+    }
+
+    private static List<List<Object>> scrollToItemCalls() {
+        return calls("scrollToItem");
+    }
+
+    /** The arguments of the calls of a function the server has queued for the browser, taking them off the queue. */
+    private static List<List<Object>> calls(String function) {
         UI.getCurrent().getInternals().getStateTree().runExecutionsBeforeClientResponse();
         return UI.getCurrent().getInternals().dumpPendingJavaScriptInvocations().stream()
                 .map(PendingJavaScriptInvocation::getInvocation)
-                .filter(invocation -> invocation.getExpression().contains("setItemExpanded"))
+                .filter(invocation -> invocation.getExpression().contains(function))
                 .map(invocation -> invocation.getParameters().subList(1, invocation.getParameters().size()))
                 .toList();
     }

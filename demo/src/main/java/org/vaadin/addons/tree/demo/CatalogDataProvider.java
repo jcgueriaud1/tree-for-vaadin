@@ -59,6 +59,11 @@ public class CatalogDataProvider extends AbstractBackEndHierarchicalDataProvider
     }
 
     @Override
+    public Entry getParent(Entry item) {
+        return item instanceof Product product ? product.category() : null;
+    }
+
+    @Override
     protected Stream<Entry> fetchChildrenFromBackEnd(HierarchicalQuery<Entry, Void> query) {
         return switch (query.getParent()) {
             case null -> CATEGORIES.stream().skip(query.getOffset()).limit(query.getLimit()).map(Entry.class::cast);

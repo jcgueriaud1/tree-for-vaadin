@@ -14,7 +14,9 @@ concurrency:
 
 jobs:
   test:
-    runs-on: ubuntu-latest
+    # Pinned: Playwright 1.56 has no Chromium build for Ubuntu 26.04, which ubuntu-latest now is.
+    # Move on with a Playwright upgrade that supports it (see playwright.version in pom.xml).
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-java@v4

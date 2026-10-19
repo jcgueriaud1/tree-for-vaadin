@@ -1,7 +1,10 @@
 import { expect, fixture, html, nextFrame, waitUntil } from '@open-wc/testing';
+import { resetMouse, sendKeys, sendMouse } from '@web/test-runner-commands';
+import { Tooltip } from '@vaadin/tooltip/src/vaadin-tooltip.js';
 import {
   type ItemPage,
   PAGE_SIZE,
+  TYPE_AHEAD_TIMEOUT,
   type TfvTree,
   type TreeServer,
 } from '../../main/resources/META-INF/resources/frontend/tfv-tree/tfv-tree.ts';
@@ -14,6 +17,14 @@ type FakeServer = TreeServer & {
   calls: unknown[][];
   /** The setExpanded calls made, as [key, expanded]. */
   expansions: unknown[][];
+  /** The keys of the select calls made. */
+  selections: string[];
+  /** The key of the item the server has selected, and the keys of its ancestors. */
+  selectedKey: string | null;
+  selectionPath: string[];
+  /** The icon and tooltip of items, by label; items not in them have none. */
+  icons: Record<string, string>;
+  tooltips: Record<string, string>;
   /** While true, fetches wait until release() is called. */
   hold: boolean;
   release(): void;
@@ -39,6 +50,11 @@ function serverWith(roots: FakeItem[]): FakeServer {
   const server: FakeServer = {
     calls: [],
     expansions: [],
+    selections: [],
+    selectedKey: null,
+    selectionPath: [],
+    icons: {},
+    tooltips: {},
     hold: false,
     release() {
       const resolve = waiting;
@@ -53,14 +69,24 @@ function serverWith(roots: FakeItem[]): FakeServer {
       const level = children(parentKey);
       const items = level.slice(offset, offset + limit).map((item, i) => {
         const key = parentKey === null ? String(offset + i) : `${parentKey}/${offset + i}`;
+        const label = typeof item === 'string' ? item : item[0];
+        const extras = {
+          icon: server.icons[label] ?? null,
+          tooltip: server.tooltips[label] ?? null,
+          selected: key === server.selectedKey,
+          onSelectionPath: server.selectionPath.includes(key),
+        };
         return typeof item === 'string'
-          ? { key, label: item, expandable: false, expanded: false }
-          : { key, label: item[0], expandable: item[1].length > 0, expanded: item[2] ?? false };
+          ? { key, label, expandable: false, expanded: false, ...extras }
+          : { key, label, expandable: item[1].length > 0, expanded: item[2] ?? false, ...extras };
       });
       return { items, size: level.length };
     },
-    setExpanded(key, expanded) {
-      server.expansions.push([key, expanded]);
+    setExpanded(expanded, ...keys) {
+      keys.forEach((key) => server.expansions.push([key, expanded]));
+    },
+    select(key) {
+      server.selections.push(key);
     },
   };
   return server;
@@ -104,9 +130,37 @@ function loadingRows(tree: TfvTree): HTMLElement[] {
   return Array.from(tree.shadowRoot!.querySelectorAll<HTMLElement>('[part="loading"]'));
 }
 
+async function clickLabel(tree: TfvTree, label: string): Promise<void> {
+  item(tree, label).querySelector<HTMLElement>('[part="label"]')!.click();
+  await settle(tree);
+}
+
+function selectedLabels(tree: TfvTree): string[] {
+  return treeItems(tree)
+    .filter((element) => element.getAttribute('aria-selected') === 'true')
+    .map((element) => element.textContent!.trim());
+}
+
+function selectionPathLabels(tree: TfvTree): string[] {
+  return treeItems(tree)
+    .filter((element) => element.hasAttribute('selection-path'))
+    .map((element) => element.textContent!.trim());
+}
+
 async function clickToggle(tree: TfvTree, label: string): Promise<void> {
   item(tree, label).querySelector<HTMLElement>('[part="toggle"]')!.click();
   await settle(tree);
+}
+
+/** Presses a key on the focused item. */
+async function press(tree: TfvTree, key: string): Promise<void> {
+  const focused = tree.shadowRoot!.activeElement ?? treeItems(tree)[0];
+  focused.dispatchEvent(new KeyboardEvent('keydown', { key, bubbles: true, composed: true, cancelable: true }));
+  await settle(tree);
+}
+
+function focusedLabel(tree: TfvTree): string | undefined {
+  return tree.shadowRoot!.activeElement?.textContent!.trim();
 }
 
 const FOLDERS: FakeItem[] = [['Documents', ['Invoices', ['Letters', ['2025', '2026']]]], 'Music', 'Pictures'];
@@ -320,6 +374,227 @@ describe('tfv-tree', () => {
     });
   });
 
+  describe('selection', () => {
+    it('marks every item as selectable, one at a time', async () => {
+      const tree = await treeWith(serverWith(FOLDERS));
+
+      expect(treeItems(tree).map((element) => element.getAttribute('aria-selected'))).to.deep.equal([
+        'false',
+        'false',
+        'false',
+      ]);
+      expect(tree.hasAttribute('aria-multiselectable')).to.be.false;
+    });
+
+    it('selects an item when the user clicks it, and tells the server', async () => {
+      const server = serverWith(FOLDERS);
+      const tree = await treeWith(server);
+
+      await clickLabel(tree, 'Music');
+
+      expect(selectedLabels(tree)).to.deep.equal(['Music']);
+      expect(item(tree, 'Music').hasAttribute('selected')).to.be.true;
+      expect(server.selections).to.deep.equal(['1']);
+    });
+
+    it('keeps the selected item selected when the user clicks it again', async () => {
+      const server = serverWith(FOLDERS);
+      const tree = await treeWith(server);
+      await clickLabel(tree, 'Music');
+
+      await clickLabel(tree, 'Music');
+
+      expect(selectedLabels(tree)).to.deep.equal(['Music']);
+      expect(server.selections).to.deep.equal(['1']);
+    });
+
+    it('selects parents too, but not by clicking their toggle', async () => {
+      const server = serverWith(FOLDERS);
+      const tree = await treeWith(server);
+
+      await clickToggle(tree, 'Documents');
+      expect(selectedLabels(tree)).to.be.empty;
+
+      await clickLabel(tree, 'Documents');
+      expect(selectedLabels(tree)).to.deep.equal(['Documents']);
+    });
+
+    it('marks the ancestors of the item the user selects as its selection path', async () => {
+      const tree = await treeWith(serverWith(FOLDERS));
+      await clickToggle(tree, 'Documents');
+      await clickToggle(tree, 'Letters');
+
+      await clickLabel(tree, '2026');
+
+      expect(selectionPathLabels(tree)).to.deep.equal(['Documents', 'Letters']);
+      expect(item(tree, 'Documents').getAttribute('aria-selected')).to.equal('false');
+      expect(item(tree, 'Documents').querySelector('[part="selection-path-marker"]')).to.exist;
+      expect(item(tree, '2026').querySelector('[part="selection-path-marker"]')).to.not.exist;
+    });
+
+    it('keeps the selection when the parent of the selected item is collapsed, showing it on the parent', async () => {
+      const server = serverWith(FOLDERS);
+      const tree = await treeWith(server);
+      await clickToggle(tree, 'Documents');
+      await clickLabel(tree, 'Letters');
+
+      await clickToggle(tree, 'Documents');
+      expect(selectionPathLabels(tree)).to.deep.equal(['Documents']);
+
+      await clickToggle(tree, 'Documents');
+      expect(selectedLabels(tree)).to.deep.equal(['Letters']);
+      expect(server.selections).to.deep.equal(['0/1']);
+    });
+
+    it('shows the selection the server sets, without expanding anything', async () => {
+      const tree = await treeWith(serverWith(FOLDERS));
+
+      tree.setSelection(null, '0');
+      await tree.updateComplete;
+      expect(selectedLabels(tree)).to.be.empty;
+      expect(selectionPathLabels(tree)).to.deep.equal(['Documents']);
+      expect(labels(tree)).to.deep.equal(['Documents', 'Music', 'Pictures']);
+
+      tree.setSelection('2');
+      await tree.updateComplete;
+      expect(selectedLabels(tree)).to.deep.equal(['Pictures']);
+      expect(selectionPathLabels(tree)).to.be.empty;
+
+      tree.setSelection(null);
+      await tree.updateComplete;
+      expect(selectedLabels(tree)).to.be.empty;
+    });
+
+    it('shows the selection on items as they are fetched', async () => {
+      const server = serverWith(FOLDERS);
+      server.selectedKey = '0/1/0';
+      server.selectionPath = ['0', '0/1'];
+      const tree = await treeWith(server);
+
+      expect(selectionPathLabels(tree)).to.deep.equal(['Documents']);
+      await clickToggle(tree, 'Documents');
+      await clickToggle(tree, 'Letters');
+
+      expect(selectionPathLabels(tree)).to.deep.equal(['Documents', 'Letters']);
+      expect(selectedLabels(tree)).to.deep.equal(['2025']);
+    });
+
+    it('does not select while disabled or read-only', async () => {
+      const server = serverWith(FOLDERS);
+      const tree = await treeWith(server);
+
+      tree.disabled = true;
+      await tree.updateComplete;
+      await clickLabel(tree, 'Music');
+      tree.disabled = false;
+      tree.readonly = true;
+      await tree.updateComplete;
+      await clickLabel(tree, 'Music');
+
+      expect(selectedLabels(tree)).to.be.empty;
+      expect(server.selections).to.be.empty;
+    });
+
+    it('has no accessibility violations with a selection', async () => {
+      const tree = await treeWith(serverWith(FOLDERS));
+      await clickToggle(tree, 'Documents');
+      await clickLabel(tree, 'Letters');
+
+      await expect(tree).to.be.accessible();
+    });
+  });
+
+  describe('scrolling to an item', () => {
+    // The server expands the ancestors before it asks to scroll
+    const MANY: FakeItem[] = [
+      'Gift cards',
+      ['Products', Array.from({ length: 25 }, (_, i) => `Product ${i}`), true],
+      'Services',
+    ];
+
+    async function smallTree(server: TreeServer): Promise<TfvTree> {
+      return treeWith(server, (element) => {
+        element.pageSize = 10;
+        element.style.height = '100px';
+        element.style.overflow = 'auto';
+      });
+    }
+
+    it('fetches pages of each level until the item is there, then scrolls it into view', async () => {
+      const server = serverWith(MANY);
+      const tree = await smallTree(server);
+
+      await tree.scrollToItem('1', '1/22');
+      await settle(tree);
+
+      expect(item(tree, 'Products').getAttribute('aria-expanded')).to.equal('true');
+      expect(server.calls.filter((call) => call[0] === '1')).to.deep.equal([
+        ['1', 0, 10],
+        ['1', 10, 10],
+        ['1', 20, 10],
+      ]);
+      expect(server.expansions).to.be.empty;
+      const treeBox = tree.getBoundingClientRect();
+      const itemBox = item(tree, 'Product 22').getBoundingClientRect();
+      expect(itemBox.top).to.be.at.least(treeBox.top);
+      expect(itemBox.bottom).to.be.at.most(treeBox.bottom);
+      expect(selectedLabels(tree)).to.be.empty;
+    });
+
+    it('waits for the root items to be fetched', async () => {
+      const server = serverWith(MANY);
+      server.hold = true;
+      const tree = await smallTree(server);
+
+      const scrolled = tree.scrollToItem('1', '1/5');
+      server.hold = false;
+      server.release();
+      await scrolled;
+      await settle(tree);
+
+      expect(labels(tree)).to.include('Product 5');
+    });
+
+    it('gives up on an item that is not there', async () => {
+      const tree = await smallTree(serverWith(MANY));
+
+      await tree.scrollToItem('1', '1/99');
+
+      expect(labels(tree)).to.include('Product 24');
+    });
+
+    it('gives up when the tree is refreshed meanwhile, as the keys are stale', async () => {
+      const server = serverWith(MANY);
+      const tree = await smallTree(server);
+      const fetches = server.calls.length;
+
+      const scrolled = tree.scrollToItem('1', '1/22');
+      tree.refresh();
+      await scrolled;
+      await settle(tree);
+
+      expect(server.calls.slice(fetches).filter((call) => call[0] === '1' && call[1] !== 0)).to.be.empty;
+    });
+
+    it('gives up when the user collapses an ancestor meanwhile, leaving it collapsed', async () => {
+      const server = serverWith(MANY);
+      server.hold = true;
+      const tree = await smallTree(server);
+      server.release();
+      await settle(tree);
+
+      const scrolled = tree.scrollToItem('1', '1/22');
+      await clickToggle(tree, 'Products');
+      server.hold = false;
+      server.release();
+      await scrolled;
+      await settle(tree);
+
+      expect(item(tree, 'Products').getAttribute('aria-expanded')).to.equal('false');
+      expect(server.expansions).to.deep.equal([['1', false]]);
+    });
+  });
+
   describe('paging', () => {
     const MANY: FakeItem[] = [['Products', Array.from({ length: 25 }, (_, i) => `Product ${i}`)]];
 
@@ -361,6 +636,450 @@ describe('tfv-tree', () => {
       ]);
       expect(loadingRows(tree)).to.be.empty;
       expect(item(tree, 'Product 24').getAttribute('aria-posinset')).to.equal('25');
+    });
+  });
+
+  describe('keyboard', () => {
+    it('puts the selected item in the tab order, until focus moves within the tree', async () => {
+      const server = serverWith(FOLDERS);
+      server.selectedKey = '1';
+      const tree = await treeWith(server);
+
+      expect(treeItems(tree).map((element) => element.tabIndex)).to.deep.equal([-1, 0, -1]);
+      tree.focus();
+      await press(tree, 'ArrowDown');
+      expect(treeItems(tree).map((element) => element.tabIndex)).to.deep.equal([-1, -1, 0]);
+    });
+
+    it('puts the selected item back in the tab order when focus leaves the tree', async () => {
+      const server = serverWith(FOLDERS);
+      server.selectedKey = '1';
+      const tree = await treeWith(server);
+      const outside = document.createElement('button');
+      tree.after(outside);
+      tree.focus();
+      await press(tree, 'ArrowDown');
+
+      outside.focus();
+      await tree.updateComplete;
+
+      expect(item(tree, 'Music').tabIndex).to.equal(0);
+    });
+
+    it('puts the deepest visible ancestor of the selected item in the tab order when it is hidden', async () => {
+      const server = serverWith(['Music', ['Documents', ['Invoices', ['Letters', ['2025', '2026']]], true]]);
+      server.selectedKey = '1/1/1';
+      server.selectionPath = ['1', '1/1'];
+      const tree = await treeWith(server);
+      await settle(tree);
+
+      expect(labels(tree)).to.deep.equal(['Music', 'Documents', 'Invoices', 'Letters']);
+      expect(item(tree, 'Letters').tabIndex).to.equal(0);
+      tree.focus();
+      expect(focusedLabel(tree)).to.equal('Letters');
+    });
+
+    it('puts the first item in the tab order when nothing on the selection path is visible', async () => {
+      const server = serverWith(FOLDERS);
+      server.selectedKey = '0/1';
+      const tree = await treeWith(server);
+
+      expect(treeItems(tree).map((element) => element.tabIndex)).to.deep.equal([0, -1, -1]);
+    });
+
+    it('moves focus up and down, and to the first and last visible items, without selecting', async () => {
+      const server = serverWith(FOLDERS);
+      const tree = await treeWith(server);
+      tree.focus();
+
+      await press(tree, 'ArrowUp');
+      expect(focusedLabel(tree)).to.equal('Documents');
+      await press(tree, 'ArrowDown');
+      expect(focusedLabel(tree)).to.equal('Music');
+      await press(tree, 'End');
+      expect(focusedLabel(tree)).to.equal('Pictures');
+      await press(tree, 'ArrowDown');
+      expect(focusedLabel(tree)).to.equal('Pictures');
+      await press(tree, 'Home');
+      expect(focusedLabel(tree)).to.equal('Documents');
+      expect(server.selections).to.be.empty;
+    });
+
+    it('expands with Right, then moves to the first child item', async () => {
+      const server = serverWith(FOLDERS);
+      const tree = await treeWith(server);
+      tree.focus();
+
+      await press(tree, 'ArrowRight');
+      expect(item(tree, 'Documents').getAttribute('aria-expanded')).to.equal('true');
+      expect(focusedLabel(tree)).to.equal('Documents');
+      expect(server.expansions).to.deep.equal([['0', true]]);
+
+      await press(tree, 'ArrowRight');
+      expect(focusedLabel(tree)).to.equal('Invoices');
+
+      await press(tree, 'ArrowRight');
+      expect(focusedLabel(tree)).to.equal('Invoices');
+    });
+
+    it('moves to the parent with Left, then collapses it', async () => {
+      const server = serverWith([['Documents', ['Invoices'], true], 'Music']);
+      const tree = await treeWith(server);
+      item(tree, 'Invoices').focus();
+
+      await press(tree, 'ArrowLeft');
+      expect(focusedLabel(tree)).to.equal('Documents');
+
+      await press(tree, 'ArrowLeft');
+      expect(labels(tree)).to.deep.equal(['Documents', 'Music']);
+      expect(server.expansions).to.deep.equal([['0', false]]);
+
+      await press(tree, 'ArrowLeft');
+      expect(focusedLabel(tree)).to.equal('Documents');
+    });
+
+    it('swaps Left and Right when right to left', async () => {
+      const tree = await treeWith(serverWith(FOLDERS), (element) => (element.dir = 'rtl'));
+      tree.focus();
+
+      await press(tree, 'ArrowLeft');
+      expect(item(tree, 'Documents').getAttribute('aria-expanded')).to.equal('true');
+      await press(tree, 'ArrowLeft');
+      expect(focusedLabel(tree)).to.equal('Invoices');
+      await press(tree, 'ArrowRight');
+      expect(focusedLabel(tree)).to.equal('Documents');
+      await press(tree, 'ArrowRight');
+      expect(item(tree, 'Documents').getAttribute('aria-expanded')).to.equal('false');
+    });
+
+    it('selects the focused item with Enter or Space', async () => {
+      const server = serverWith(FOLDERS);
+      const tree = await treeWith(server);
+      tree.focus();
+
+      await press(tree, 'Enter');
+      expect(selectedLabels(tree)).to.deep.equal(['Documents']);
+      await press(tree, 'ArrowDown');
+      await press(tree, ' ');
+      expect(selectedLabels(tree)).to.deep.equal(['Music']);
+      expect(server.selections).to.deep.equal(['0', '1']);
+    });
+
+    it('does not select with the keyboard while read-only', async () => {
+      const server = serverWith(FOLDERS);
+      const tree = await treeWith(server, (element) => (element.readonly = true));
+      tree.focus();
+
+      await press(tree, 'Enter');
+
+      expect(selectedLabels(tree)).to.be.empty;
+    });
+
+    it('expands the siblings of the focused item with *, in one call to the server', async () => {
+      const server = serverWith([['Documents', ['Invoices']], 'Music', ['Pictures', ['Holidays']]]);
+      const tree = await treeWith(server);
+      tree.focus();
+
+      await press(tree, '*');
+
+      expect(labels(tree)).to.deep.equal(['Documents', 'Invoices', 'Music', 'Pictures', 'Holidays']);
+      expect(server.expansions).to.deep.equal([
+        ['0', true],
+        ['2', true],
+      ]);
+      expect(focusedLabel(tree)).to.equal('Documents');
+    });
+
+    it('moves to the next visible item starting with the typed character, cycling through them', async () => {
+      const tree = await treeWith(serverWith(['Documents', 'Music', 'Movies', 'Pictures']));
+      tree.focus();
+
+      await press(tree, 'm');
+      expect(focusedLabel(tree)).to.equal('Music');
+      await press(tree, 'm');
+      expect(focusedLabel(tree)).to.equal('Movies');
+      await press(tree, 'M');
+      expect(focusedLabel(tree)).to.equal('Music');
+    });
+
+    it('moves to the item starting with the characters typed in quick succession, spaces included', async () => {
+      const tree = await treeWith(serverWith(['Gift cards', 'Games', 'Gift boxes']));
+      tree.focus();
+
+      for (const key of 'gift b') {
+        await press(tree, key);
+      }
+
+      expect(focusedLabel(tree)).to.equal('Gift boxes');
+      expect(selectedLabels(tree)).to.be.empty;
+    });
+
+    it('starts a new search after a pause in typing', async () => {
+      const tree = await treeWith(serverWith(['Documents', 'Music', 'Pictures']));
+      tree.focus();
+
+      await press(tree, 'm');
+      await new Promise((resolve) => setTimeout(resolve, TYPE_AHEAD_TIMEOUT + 50));
+      await press(tree, 'p');
+
+      expect(focusedLabel(tree)).to.equal('Pictures');
+    });
+
+    it('searches only the visible items', async () => {
+      const tree = await treeWith(serverWith(FOLDERS));
+      tree.focus();
+
+      await press(tree, 'l');
+
+      expect(focusedLabel(tree)).to.equal('Documents');
+    });
+
+    it('ignores keys while disabled', async () => {
+      const server = serverWith(FOLDERS);
+      const tree = await treeWith(server);
+      tree.focus();
+      tree.disabled = true;
+      await tree.updateComplete;
+
+      await press(tree, 'ArrowRight');
+      await press(tree, 'Enter');
+
+      expect(server.expansions).to.be.empty;
+      expect(server.selections).to.be.empty;
+    });
+  });
+
+  describe('icons and tooltips', () => {
+    function folderServer(): FakeServer {
+      const server = serverWith(['Documents', 'Music', 'Pictures']);
+      server.icons = { Documents: 'vaadin:folder', Music: 'vaadin:music' };
+      server.tooltips = { Documents: 'Your documents', Pictures: 'Your pictures' };
+      return server;
+    }
+
+    function tooltip(tree: TfvTree): Tooltip {
+      return tree.shadowRoot!.querySelector('vaadin-tooltip')!;
+    }
+
+    function description(tree: TfvTree, label: string): string | undefined {
+      const id = item(tree, label).getAttribute('aria-describedby');
+      return id === null ? undefined : tree.shadowRoot!.getElementById(id)?.textContent!;
+    }
+
+    function hover(element: Element): void {
+      element.dispatchEvent(new MouseEvent('mouseover', { bubbles: true, composed: true }));
+    }
+
+    before(() => {
+      Tooltip.setDefaultHoverDelay(0);
+      Tooltip.setDefaultFocusDelay(0);
+      Tooltip.setDefaultHideDelay(0);
+    });
+
+    after(() => {
+      Tooltip.setDefaultHoverDelay(-1);
+      Tooltip.setDefaultFocusDelay(-1);
+      Tooltip.setDefaultHideDelay(-1);
+    });
+
+    it('shows the icon of an item before its label, hidden from assistive technology', async () => {
+      const tree = await treeWith(folderServer());
+
+      const icon = item(tree, 'Documents').querySelector('[part="icon"]')!;
+      expect(icon.localName).to.equal('vaadin-icon');
+      expect(icon.getAttribute('icon')).to.equal('vaadin:folder');
+      expect(icon.getAttribute('aria-hidden')).to.equal('true');
+      expect(icon.nextElementSibling!.getAttribute('part')).to.equal('label');
+      expect(labels(tree)).to.deep.equal(['Documents', 'Music', 'Pictures'], 'the label stays the only text');
+    });
+
+    it('shows no icon for an item without one', async () => {
+      const tree = await treeWith(folderServer());
+
+      expect(item(tree, 'Pictures').querySelector('[part="icon"]')).to.equal(null);
+    });
+
+    it('describes an item by its tooltip, and an item without one by nothing', async () => {
+      const tree = await treeWith(folderServer());
+
+      expect(description(tree, 'Documents')).to.equal('Your documents');
+      expect(item(tree, 'Music').hasAttribute('aria-describedby')).to.equal(false);
+      expect(tooltip(tree).getAttribute('aria-hidden')).to.equal('true', 'a tree only holds treeitems');
+    });
+
+    it('opens the tooltip of the item hovered, and closes it over an item without one', async () => {
+      const tree = await treeWith(folderServer());
+
+      hover(item(tree, 'Documents').querySelector('[part="label"]')!);
+      await tree.updateComplete;
+
+      expect(tooltip(tree).opened).to.equal(true);
+      expect(tooltip(tree).target).to.equal(item(tree, 'Documents'));
+      expect(tooltip(tree).text).to.equal('Your documents');
+
+      hover(item(tree, 'Pictures'));
+      expect(tooltip(tree).target).to.equal(item(tree, 'Pictures'));
+      expect(tooltip(tree).text).to.equal('Your pictures');
+
+      hover(item(tree, 'Music'));
+      expect(tooltip(tree).opened).to.equal(false);
+    });
+
+    it('closes the tooltip when the item is pressed, until another item is hovered', async () => {
+      const tree = await treeWith(folderServer());
+      hover(item(tree, 'Documents'));
+
+      const label = item(tree, 'Documents').querySelector('[part="label"]')!;
+      label.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, composed: true }));
+      hover(label);
+
+      expect(tooltip(tree).opened).to.equal(false);
+    });
+
+    it('opens the tooltip of the item focused with the keyboard, and closes it with Escape', async () => {
+      const tree = await treeWith(folderServer());
+
+      await sendKeys({ press: 'Tab' });
+      await tree.updateComplete;
+      expect(focusedLabel(tree)).to.equal('Documents');
+      expect(tooltip(tree).opened).to.equal(true);
+      expect(tooltip(tree).text).to.equal('Your documents');
+
+      await sendKeys({ press: 'ArrowDown' });
+      expect(focusedLabel(tree)).to.equal('Music');
+      expect(tooltip(tree).opened).to.equal(false);
+
+      await sendKeys({ press: 'ArrowDown' });
+      expect(tooltip(tree).opened).to.equal(true);
+      expect(tooltip(tree).target).to.equal(item(tree, 'Pictures'));
+
+      let escaped = false;
+      document.addEventListener('keydown', () => (escaped = true), { once: true });
+      await sendKeys({ press: 'Escape' });
+      expect(tooltip(tree).opened).to.equal(false);
+      expect(escaped).to.equal(false, 'Escape closing the tooltip goes no further');
+    });
+
+    it('does not open the tooltip of an item focused by clicking it', async () => {
+      const tree = await treeWith(folderServer());
+      const { x, y, height } = item(tree, 'Documents').querySelector('[part="label"]')!.getBoundingClientRect();
+
+      await sendMouse({ type: 'click', position: [Math.round(x + 5), Math.round(y + height / 2)] });
+      await settle(tree);
+
+      expect(focusedLabel(tree)).to.equal('Documents');
+      expect(tooltip(tree).opened).to.equal(false);
+      await resetMouse();
+    });
+
+    it('closes the tooltip when its item is hidden', async () => {
+      const server = serverWith(FOLDERS);
+      server.tooltips = { Invoices: 'Paid and unpaid' };
+      const tree = await treeWith(server);
+      await clickToggle(tree, 'Documents');
+      hover(item(tree, 'Invoices'));
+      expect(tooltip(tree).opened).to.equal(true);
+
+      tree.setItemExpanded('0', false);
+      await settle(tree);
+
+      expect(tooltip(tree).opened).to.equal(false);
+    });
+  });
+
+  describe('styling', () => {
+    function stateOf(tree: TfvTree, label: string): string[] {
+      return ['focused', 'focus-ring', 'selected', 'selection-path', 'expanded'].filter((name) =>
+        item(tree, label).hasAttribute(name),
+      );
+    }
+
+    it('marks the focused item, with a focus ring only when focused with the keyboard', async () => {
+      const tree = await treeWith(serverWith(FOLDERS));
+      const outside = document.createElement('button');
+      tree.after(outside);
+
+      await sendKeys({ press: 'Tab' });
+      await tree.updateComplete;
+      expect(stateOf(tree, 'Documents')).to.deep.equal(['focused', 'focus-ring']);
+
+      await sendKeys({ press: 'ArrowDown' });
+      await tree.updateComplete;
+      expect(stateOf(tree, 'Documents')).to.deep.equal([]);
+      expect(stateOf(tree, 'Music')).to.deep.equal(['focused', 'focus-ring']);
+
+      const { x, y, height } = item(tree, 'Pictures').querySelector('[part="label"]')!.getBoundingClientRect();
+      await sendMouse({ type: 'click', position: [Math.round(x + 5), Math.round(y + height / 2)] });
+      await settle(tree);
+      expect(stateOf(tree, 'Pictures')).to.deep.equal(['focused', 'selected']);
+      await resetMouse();
+
+      outside.focus();
+      await tree.updateComplete;
+      expect(stateOf(tree, 'Pictures')).to.deep.equal(['selected']);
+    });
+
+    it('marks the expanded items and the selection path', async () => {
+      const server = serverWith([['Documents', ['Invoices', 'Letters'], true], 'Music']);
+      server.selectedKey = '0/1';
+      server.selectionPath = ['0'];
+      const tree = await treeWith(server);
+      await settle(tree);
+
+      expect(stateOf(tree, 'Documents')).to.deep.equal(['selection-path', 'expanded']);
+      expect(stateOf(tree, 'Letters')).to.deep.equal(['selected']);
+    });
+
+    it('names the states of an item in its part, for styling with ::part() from outside', async () => {
+      const server = serverWith([['Documents', ['Invoices', 'Letters'], true], 'Music']);
+      server.selectedKey = '0/1';
+      server.selectionPath = ['0'];
+      const tree = await treeWith(server);
+      await settle(tree);
+
+      expect(item(tree, 'Documents').getAttribute('part')).to.equal('item expanded selection-path');
+      expect(item(tree, 'Letters').getAttribute('part')).to.equal('item selected');
+      expect(item(tree, 'Music').getAttribute('part')).to.equal('item');
+
+      const style = document.createElement('style');
+      style.textContent = 'tfv-tree::part(item selected) { text-decoration: underline; }';
+      document.head.append(style);
+      try {
+        expect(getComputedStyle(item(tree, 'Letters')).textDecorationLine).to.equal('underline');
+        expect(getComputedStyle(item(tree, 'Music')).textDecorationLine).to.equal('none');
+      } finally {
+        style.remove();
+      }
+    });
+
+    it('lays the parts out from its --tfv-tree-* properties', async () => {
+      const server = serverWith([['Documents', ['Invoices', 'Letters'], true], 'Music']);
+      server.selectedKey = '1';
+      const tree = await treeWith(server, (element) => {
+        element.style.setProperty('--tfv-tree-indent', '30px');
+        element.style.setProperty('--tfv-tree-item-padding-inline', '4px');
+        element.style.setProperty('--tfv-tree-selected-background', 'rgb(1, 2, 3)');
+        element.style.setProperty('--tfv-tree-selected-text-color', 'rgb(250, 251, 252)');
+      });
+      await settle(tree);
+
+      expect(getComputedStyle(item(tree, 'Documents')).paddingInlineStart).to.equal('4px');
+      expect(getComputedStyle(item(tree, 'Letters')).paddingInlineStart).to.equal('34px');
+      expect(getComputedStyle(item(tree, 'Music')).backgroundColor).to.equal('rgb(1, 2, 3)');
+      expect(getComputedStyle(item(tree, 'Music')).color).to.equal('rgb(250, 251, 252)');
+    });
+
+    it('takes the Aura token before the Lumo one, and the Lumo one when there is no Aura', async () => {
+      const server = serverWith(['Documents']);
+      server.selectedKey = '0';
+      const tree = await treeWith(server);
+      const theme = tree.parentElement!;
+
+      theme.style.setProperty('--lumo-primary-text-color', 'rgb(0, 0, 200)');
+      expect(getComputedStyle(item(tree, 'Documents')).backgroundColor).to.equal('rgb(0, 0, 200)');
+
+      theme.style.setProperty('--aura-accent-text-color', 'rgb(200, 0, 0)');
+      expect(getComputedStyle(item(tree, 'Documents')).backgroundColor).to.equal('rgb(200, 0, 0)');
     });
   });
 });
