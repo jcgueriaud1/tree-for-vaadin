@@ -1,0 +1,42 @@
+package org.vaadin.addons.tree;
+
+import java.util.Collection;
+import java.util.List;
+
+import com.vaadin.flow.component.ComponentEvent;
+
+/**
+ * Fired when items of a {@link Tree} are collapsed, by the user or by
+ * {@link Tree#collapse(Collection)}.
+ *
+ * @param <T>
+ *            the type of the items
+ */
+public class CollapseEvent<T> extends ComponentEvent<Tree<T>> {
+
+    private final List<T> items;
+
+    /**
+     * Creates an event for items that were collapsed.
+     *
+     * @param source
+     *            the tree, not {@code null}
+     * @param fromClient
+     *            {@code true} if the user collapsed the items
+     * @param items
+     *            the items that were collapsed
+     */
+    public CollapseEvent(Tree<T> source, boolean fromClient, Collection<T> items) {
+        super(source, fromClient);
+        this.items = List.copyOf(items);
+    }
+
+    /**
+     * Gets the items that were collapsed.
+     *
+     * @return the collapsed items, never empty
+     */
+    public List<T> getItems() {
+        return items;
+    }
+}
