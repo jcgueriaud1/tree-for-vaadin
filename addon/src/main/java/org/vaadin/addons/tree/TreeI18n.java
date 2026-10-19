@@ -1,0 +1,87 @@
+package org.vaadin.addons.tree;
+
+import java.io.Serializable;
+import java.util.Objects;
+
+/**
+ * The texts a {@link Tree} shows by itself, in English unless set otherwise.
+ * Set them with {@link Tree#setI18n(TreeI18n)}; changing them afterwards has no
+ * effect until they are set again.
+ *
+ * <pre>{@code
+ * tree.setI18n(new TreeI18n().setLoading("Ladataan…").setEmpty("Ei kohteita")
+ *         .setLoadError("Kohteiden lataus epäonnistui"));
+ * }</pre>
+ */
+public class TreeI18n implements Serializable {
+
+    private String loading = "Loading…";
+    private String empty = "No items";
+    private String loadError = "Could not load the items";
+
+    /**
+     * Gets the text shown while items are being fetched.
+     *
+     * @return the loading text, never {@code null}
+     */
+    public String getLoading() {
+        return loading;
+    }
+
+    /**
+     * Sets the text shown while items are being fetched. Assistive technology
+     * learns of the loading from {@code aria-busy} instead.
+     *
+     * @param loading
+     *            the loading text, not {@code null}
+     * @return this object, for chaining
+     */
+    public TreeI18n setLoading(String loading) {
+        this.loading = Objects.requireNonNull(loading, "loading");
+        return this;
+    }
+
+    /**
+     * Gets the text shown when the tree has no items.
+     *
+     * @return the empty text, never {@code null}
+     */
+    public String getEmpty() {
+        return empty;
+    }
+
+    /**
+     * Sets the text shown when the tree has no items. It is also the
+     * accessible description of the tree while it is empty.
+     *
+     * @param empty
+     *            the empty text, not {@code null}
+     * @return this object, for chaining
+     */
+    public TreeI18n setEmpty(String empty) {
+        this.empty = Objects.requireNonNull(empty, "empty");
+        return this;
+    }
+
+    /**
+     * Gets the text shown when fetching items fails.
+     *
+     * @return the load error text, never {@code null}
+     */
+    public String getLoadError() {
+        return loadError;
+    }
+
+    /**
+     * Sets the text shown when fetching items fails. It is also announced to
+     * assistive technology.
+     *
+     * @param loadError
+     *            the load error text, not {@code null}
+     * @return this object, for chaining
+     */
+    public TreeI18n setLoadError(String loadError) {
+        this.loadError = Objects.requireNonNull(loadError, "loadError");
+        return this;
+    }
+}

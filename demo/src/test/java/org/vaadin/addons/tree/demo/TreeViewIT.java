@@ -18,6 +18,7 @@ import com.microsoft.playwright.Browser;
 import com.microsoft.playwright.Locator;
 import com.microsoft.playwright.Page;
 import com.microsoft.playwright.Playwright;
+import com.microsoft.playwright.assertions.LocatorAssertions;
 import com.microsoft.playwright.options.AriaRole;
 
 /** The demo in a real browser, as assistive technology sees it. Started by the build on demo.url. */
@@ -469,6 +470,60 @@ class TreeViewIT {
     }
 
     @Test
+    void anItemWhoseChildItemsFailToLoadCollapsesBackAndItsGroupBrieflyShowsTheError() {
+        Locator archive = item(projects(), "Archive");
+
+        archive.locator("[part=toggle]").click();
+
+        assertThat(page.getByRole(AriaRole.ALERT)).hasText("Could not load the items");
+        assertThat(archive).hasAttribute("aria-expanded", "false");
+        assertThat(projects().locator("[part=error]")).hasText("Could not load the items");
+        assertThat(projectsStatus()).hasText("Collapsed Archive by the user");
+        assertThat(item(projects(), "2019")).hasCount(0);
+
+        assertThat(projects().locator("[part=error]")).hasCount(0, new LocatorAssertions.HasCountOptions().setTimeout(10_000));
+    }
+
+    @Test
+    void aTreeWithoutItemsShowsAndIsDescribedByTheEmptyText() {
+        assertThat(item(projects(), "Reports")).isVisible();
+
+        page.getByRole(AriaRole.BUTTON, new Page.GetByRoleOptions().setName("Remove all projects")).click();
+
+        assertThat(projects().getByText("No items")).isVisible();
+        assertThat(projects()).hasAccessibleDescription("No items");
+        assertThat(projects().getByRole(AriaRole.TREEITEM)).hasCount(0);
+
+        page.getByRole(AriaRole.BUTTON, new Page.GetByRoleOptions().setName("Restore projects")).click();
+
+        assertThat(projects().getByRole(AriaRole.TREEITEM)).hasText(new String[] { "Reports", "Archive", "Drafts" });
+        assertThat(projects()).hasAccessibleDescription("");
+    }
+
+    @Test
+    void refreshingAnItemShowsItsNewChildItemsAndKeepsItExpanded() {
+        item(projects(), "Reports").locator("[part=toggle]").click();
+        assertThat(item(projects(), "Report 1")).isVisible();
+
+        page.getByRole(AriaRole.BUTTON, new Page.GetByRoleOptions().setName("Add a report")).click();
+
+        assertThat(projects().getByRole(AriaRole.TREEITEM))
+                .hasText(new String[] { "Reports", "Report 1", "Report 2", "Archive", "Drafts" });
+        assertThat(item(projects(), "Reports")).hasAttribute("aria-expanded", "true");
+    }
+
+    @Test
+    void refreshingAllKeepsTheItemsThatStillExistExpanded() {
+        item(projects(), "Reports").locator("[part=toggle]").click();
+        assertThat(item(projects(), "Report 1")).isVisible();
+
+        page.getByRole(AriaRole.BUTTON, new Page.GetByRoleOptions().setName("Restore projects")).click();
+
+        assertThat(projects().getByRole(AriaRole.TREEITEM))
+                .hasText(new String[] { "Reports", "Report 1", "Archive", "Drafts" });
+    }
+
+    @Test
     void thePageHasNoAccessibilityViolations() {
         page.getByRole(AriaRole.BUTTON, new Page.GetByRoleOptions().setName("Expand all")).click();
         assertThat(item(folders(), "Holidays")).isVisible();
@@ -476,6 +531,8 @@ class TreeViewIT {
         assertOnSelectionPath("Letters");
         item(folders(), "Letters").locator("[part=label]").hover();
         assertThat(tooltip()).isVisible();
+        page.getByRole(AriaRole.BUTTON, new Page.GetByRoleOptions().setName("Remove all projects")).click();
+        assertThat(projects().getByText("No items")).isVisible();
 
         // Vaadin's connection indicator sits outside any landmark; it is not ours to fix
         AxeResults results = new AxeBuilder(page).exclude(List.of("vaadin-connection-indicator")).analyze();
@@ -510,6 +567,14 @@ class TreeViewIT {
     /** The tooltip of the folders, hidden from assistive technology as a tree only holds treeitems. */
     private Locator tooltip() {
         return folders().locator("[role=tooltip]");
+    }
+
+    private Locator projects() {
+        return page.getByRole(AriaRole.TREE, new Page.GetByRoleOptions().setName("Projects"));
+    }
+
+    private Locator projectsStatus() {
+        return page.locator("section").filter(new Locator.FilterOptions().setHas(projects())).getByRole(AriaRole.STATUS);
     }
 
     private Locator folders() {

@@ -11,7 +11,8 @@ The words in bold below are defined in [GLOSSARY.md](GLOSSARY.md); the design de
 
 The tree shows its **root items**, and items can be **expanded** and **collapsed**, by the user (with the
 toggle in front of an item, or the keyboard) or by the server. The user selects an item by clicking it, or
-with Enter or Space. Items can show an icon and a tooltip. The tree follows the Aura or Lumo theme, light or
+with Enter or Space. Items can show an icon and a tooltip. The tree keeps its state when the data is
+refreshed, shows when it has no items or when items fail to load, and its texts can be translated. The tree follows the Aura or Lumo theme, light or
 dark, and can be restyled (see [Styling](#styling)). Checkbox selection is still to come.
 
 ## Usage
@@ -34,6 +35,10 @@ tree.addCollapseListener(event -> log("Collapsed " + event.getItems()));
 tree.asSingleSelect().setValue(letters); // the selected item, or null for none
 tree.asSingleSelect().addValueChangeListener(event -> open(event.getValue()));
 tree.scrollToItem(letters);             // expands its ancestors and scrolls it into view
+
+data.addItem(documents, receipts);
+tree.getDataProvider().refreshItem(documents, true); // or refreshAll()
+tree.setI18n(new TreeI18n().setEmpty("No folders")); // the texts the tree shows by itself
 ```
 
 The tree is rendered as an ARIA `tree` whose **items** are `treeitem`s. The browser fetches them from the
@@ -43,8 +48,7 @@ when the user scrolls near its end. `setPageSize(int)` sets the page size (defau
 the page, with its level and position in its level in `aria-level`, `aria-posinset` and `aria-setsize`; while a
 level is being fetched, its parent (or the tree, for the root items) is `aria-busy`.
 
-Expanded items stay expanded when the data provider is refreshed. Expanding an item does not expand its
-ancestors: its child items show once they are all expanded too.
+Expanding an item does not expand its ancestors: its child items show once they are all expanded too.
 
 There is one **selected item** at most (`setSelectionMode(SelectionMode.SINGLE)`, the only mode for now), and
 every item can be selected, parents too. The `Tree` is not itself a `HasValue`: `asSingleSelect()` is, so it can
@@ -56,6 +60,25 @@ the value never expands anything. The ancestors of the selected item, its **sele
 data provider to implement `getParent`, as `TreeDataProvider` does, and is left out otherwise.
 `scrollToItem(item)` needs `getParent` too: it expands the item's ancestors and fetches the pages on the way
 down, then scrolls the item into view.
+
+### Data changes, errors and texts
+
+`refreshAll()` on the data provider has the browser fetch the items again. Items that still exist, by their id
+(`getId`), stay expanded, and the value stays as it is even if its item is gone: clear it if need be.
+`refreshItem(item)` sends one item again (its label, icon, tooltip and whether it has child items);
+`refreshItem(item, true)` also fetches its child items again, moving focus to the item if one of them had it.
+
+If the data provider throws while fetching child items, Flow hands the exception to the session's
+`ErrorHandler`, which logs it by default. In the browser, the item collapses back (with a `CollapseEvent` from
+the client), and its group shows "Could not load the items" for three seconds (part `error`); expanding it
+again fetches the child items again. If the root items fail to load, the error stays until the next refresh.
+The error is announced to screen readers through Vaadin's live region, as an alert.
+
+A tree without items shows "No items" (part `empty`), which is also its accessible description
+(`aria-description`), unless the app gives the tree a description of its own.
+
+The texts the tree shows by itself, "Loading…", "No items" and the load error, are English by default and
+set with `setI18n(new TreeI18n()...)`. Set the object again after changing it.
 
 ### Icons and tooltips
 
@@ -123,6 +146,8 @@ indicator.
 | `label` | The label of an item |
 | `selection-path-marker` | The dot after an ancestor of the selected item |
 | `loading` | The row shown while the items of a level are fetched |
+| `empty` | The row shown when the tree has no items |
+| `error` | The row shown when items fail to load |
 
 There is no `children` part: the items are siblings in the DOM, each indented by its level (`aria-level`),
 so nothing wraps the child items of an item. Indent them with `--tfv-tree-indent`.
@@ -143,7 +168,8 @@ the shadow DOM, the same states are attributes of the item.
 | --- | --- |
 | `--tfv-tree-font-size`, `--tfv-tree-line-height` | `--aura-font-size-m` / `--lumo-font-size-m`, and the matching line heights |
 | `--tfv-tree-text-color` | `--lumo-body-text-color` / `--vaadin-text-color` |
-| `--tfv-tree-secondary-text-color` | `--lumo-secondary-text-color` / `--vaadin-text-color-secondary`: loading row, and the defaults of the two below |
+| `--tfv-tree-secondary-text-color` | `--lumo-secondary-text-color` / `--vaadin-text-color-secondary`: loading and empty rows, and the defaults of the two below |
+| `--tfv-tree-error-text-color` | the error row: `--aura-red-text` / `--lumo-error-text-color`, else `--tfv-tree-text-color` |
 | `--tfv-tree-icon-color`, `--tfv-tree-toggle-color` | `--tfv-tree-secondary-text-color` |
 | `--tfv-tree-icon-size` | `--lumo-icon-size-s` / `--vaadin-icon-size` |
 | `--tfv-tree-indent` | the indentation per level: `--lumo-space-l` / `--vaadin-padding-l` |
@@ -173,7 +199,7 @@ selected item takes the system's `Highlight` colors.
 - Lit tests alone: `cd addon && npm ci && npm test`
 
 The Lit element (`addon/src/main/resources/META-INF/resources/frontend/tfv-tree/`) ships inside the jar and is
-loaded with `@JsModule`. `addon/package.json` only holds test tooling: at run time Lit, `<vaadin-icon>` and `<vaadin-tooltip>` come from the Vaadin app.
+loaded with `@JsModule`. `addon/package.json` only holds test tooling: at run time Lit, `<vaadin-icon>`, `<vaadin-tooltip>` and Vaadin's live region (`@vaadin/a11y-base`) come from the Vaadin app.
 
 ## License
 

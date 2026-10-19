@@ -12,12 +12,18 @@ import com.vaadin.flow.component.html.H2;
 import com.vaadin.flow.component.html.Main;
 import com.vaadin.flow.component.html.Paragraph;
 import com.vaadin.flow.component.html.Section;
+import com.vaadin.flow.data.provider.hierarchy.HierarchicalQuery;
 import com.vaadin.flow.data.provider.hierarchy.TreeData;
+import com.vaadin.flow.data.provider.hierarchy.TreeDataProvider;
+import com.vaadin.flow.function.SerializablePredicate;
 import com.vaadin.flow.router.PageTitle;
 import com.vaadin.flow.router.Route;
 import org.vaadin.addons.tree.Tree;
 
-/** A tree of folders kept in memory, and a large product catalogue fetched from a backend. */
+/**
+ * A tree of folders kept in memory, a large product catalogue fetched from a
+ * backend, and projects that change and fail to load.
+ */
 @Route("")
 @PageTitle("Tree for Vaadin")
 public class TreeView extends Main {
@@ -27,7 +33,7 @@ public class TreeView extends Main {
     }
 
     public TreeView() {
-        add(new H1("Tree for Vaadin"), new ThemeSwitcher(), folders(), catalogue());
+        add(new H1("Tree for Vaadin"), new ThemeSwitcher(), folders(), catalogue(), projects());
     }
 
     private static Section folders() {
@@ -74,6 +80,57 @@ public class TreeView extends Main {
 
         return new Section(new H2("Catalogue, from a backend"), show, tree,
                 eventLog(tree, CatalogDataProvider.Entry::name));
+    }
+
+    /**
+     * Projects whose data the buttons change, refreshing one item or all of
+     * them. The child items of the archive fail to load.
+     */
+    private static Section projects() {
+        TreeData<Folder> data = new TreeData<>();
+        fillProjects(data);
+        Folder reports = new Folder("Reports");
+        Folder archive = new Folder("Archive");
+        TreeDataProvider<Folder> provider = new TreeDataProvider<>(data) {
+            @Override
+            public Stream<Folder> fetchChildren(HierarchicalQuery<Folder, SerializablePredicate<Folder>> query) {
+                if (archive.equals(query.getParent())) {
+                    throw new IllegalStateException("The archive is offline");
+                }
+                return super.fetchChildren(query);
+            }
+        };
+        Tree<Folder> tree = new Tree<>();
+        tree.setDataProvider(provider);
+        tree.setItemLabelGenerator(Folder::name);
+        tree.setItemIconGenerator(folder -> "vaadin:folder");
+        tree.setAriaLabel("Projects");
+        tree.setWidth("20em");
+
+        Button add = new Button("Add a report", event -> {
+            data.addItem(reports, new Folder("Report " + (data.getChildren(reports).size() + 1)));
+            provider.refreshItem(reports, true);
+        });
+        Button removeAll = new Button("Remove all projects", event -> {
+            data.clear();
+            provider.refreshAll();
+        });
+        Button restore = new Button("Restore projects", event -> {
+            data.clear();
+            fillProjects(data);
+            provider.refreshAll();
+        });
+
+        return new Section(new H2("Projects, changing and failing"), add, removeAll, restore, tree,
+                eventLog(tree, Folder::name));
+    }
+
+    private static void fillProjects(TreeData<Folder> data) {
+        Folder reports = new Folder("Reports");
+        Folder archive = new Folder("Archive");
+        data.addRootItems(reports, archive, new Folder("Drafts"));
+        data.addItems(reports, new Folder("Report 1"));
+        data.addItems(archive, new Folder("2019"));
     }
 
     /** A status line telling the latest items expanded, collapsed or selected, and by whom. */
