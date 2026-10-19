@@ -2,6 +2,9 @@
 
 An accessible tree component for Vaadin Flow whose items are loaded lazily from the server.
 
+**Live demo:** https://tree-for-vaadin.onrender.com. It runs on Render's free plan, so the first visit after a
+quiet spell can take about a minute while it wakes up.
+
 - Java 21
 - Vaadin 25.3. The add-on depends on Vaadin only, not on Spring.
 
@@ -203,7 +206,7 @@ loaded with `@JsModule`. `addon/package.json` only holds test tooling: at run ti
 
 ### Hosting the demo
 
-The demo runs on [Render](https://render.com)'s free plan from the `Dockerfile`, which builds the production
+The [live demo](https://tree-for-vaadin.onrender.com) runs on [Render](https://render.com)'s free plan from the `Dockerfile`, which builds the production
 bundle and runs it on a small JRE image sized for the free instance (512 MB, 0.1 CPU).
 [`render.yaml`](render.yaml) is the Blueprint: on Render, *New > Blueprint* and pick this repository. It
 redeploys when `main` changes and the Test workflow passes. Free instances sleep after 15 minutes without
