@@ -24,12 +24,15 @@ export interface ItemPage {
 /** The server side of the tree, see Tree.java. */
 export interface TreeServer {
   fetchChildren(parentKey: string | null, offset: number, limit: number): Promise<ItemPage>;
-  setExpanded(key: string, expanded: boolean): unknown;
+  setExpanded(expanded: boolean, ...keys: string[]): unknown;
   select(key: string): unknown;
 }
 
 /** How many items are fetched at once, unless the server sets `pageSize`. */
 export const PAGE_SIZE = 50;
+
+/** How long type-ahead waits for the next character before starting a new search, in milliseconds. */
+export const TYPE_AHEAD_TIMEOUT = 500;
 
 /** The text shown while the items of a level are being fetched. */
 const LOADING = 'Loading…';
@@ -88,8 +91,13 @@ function hasMore(level: Level): boolean {
  * fetched stays in the DOM, flat, with its level and position in `aria-level`,
  * `aria-posinset` and `aria-setsize`.
  *
- * One item at a time is in the tab order (roving tabindex); the arrow, Home and End
- * keys move focus between visible items.
+ * One item at a time is in the tab order (roving tabindex): the focused item, or when
+ * focus enters the tree, the selected item if visible, else the first item. The keys
+ * follow the ARIA tree pattern, selection not following focus: Up and Down move focus
+ * between visible items, Home and End to the first and last; Right expands an item or
+ * moves to its first child item, Left collapses it or moves to its parent (swapped
+ * right to left); Enter and Space select the focused item; `*` expands its siblings;
+ * typing moves to the next visible item whose label starts with what was typed.
  *
  * Clicking an item selects it, and tells `$server.select`; the server sets the
  * selection with `setSelection`. The ancestors of the selected item have the
@@ -189,6 +197,12 @@ export class TfvTree extends LitElement {
         color: HighlightText;
       }
 
+      /* The focus ring, otherwise lost on the selected item's Highlight */
+      [part='item'][selected]:focus-visible {
+        outline-color: HighlightText;
+        outline-offset: -4px;
+      }
+
       [part='selection-path-marker'] {
         background: CanvasText;
       }
@@ -222,6 +236,10 @@ export class TfvTree extends LitElement {
   /** Fetches the next page of a level when its loading row scrolls into view. */
   private _loadingRowObserver?: IntersectionObserver;
 
+  /** What the user has typed so far to move focus by label, lower-cased. */
+  private _typed = '';
+  private _typedTimeout?: ReturnType<typeof setTimeout>;
+
   constructor() {
     super();
     this.disabled = false;
@@ -245,6 +263,8 @@ export class TfvTree extends LitElement {
   override disconnectedCallback(): void {
     this._loadingRowObserver?.disconnect();
     this._loadingRowObserver = undefined;
+    clearTimeout(this._typedTimeout);
+    this._typed = '';
     super.disconnectedCallback();
   }
 
@@ -346,7 +366,13 @@ export class TfvTree extends LitElement {
     const rows = this._rows();
     const tabbableKey = this._tabbableKey(rows);
     return html`
-      <div role="none" @keydown=${this._onKeyDown} @focusin=${this._onFocusIn} @click=${this._onClick}>
+      <div
+        role="none"
+        @keydown=${this._onKeyDown}
+        @focusin=${this._onFocusIn}
+        @focusout=${this._onFocusOut}
+        @click=${this._onClick}
+      >
         ${repeat(
           rows,
           (row) => (row.kind === 'item' ? row.node.item.key : `loading:${row.level.parent?.item.key ?? ''}`),
@@ -420,10 +446,18 @@ export class TfvTree extends LitElement {
     return rows;
   }
 
-  /** The key of the item in the tab order: the focused item if visible, else the first item. */
+  /** The visible items, in tree order. */
+  private _visibleNodes(rows: Row[] = this._rows()): Node[] {
+    return rows.flatMap((row) => (row.kind === 'item' ? [row.node] : []));
+  }
+
+  /**
+   * The key of the item in the tab order: the focused item if visible, else the
+   * selected item if visible, else the first item.
+   */
   private _tabbableKey(rows: Row[] = this._rows()): string | null {
-    const items = rows.flatMap((row) => (row.kind === 'item' ? [row.node.item.key] : []));
-    return this._focusedKey !== null && items.includes(this._focusedKey) ? this._focusedKey : (items[0] ?? null);
+    const keys = this._visibleNodes(rows).map((node) => node.item.key);
+    return [this._focusedKey, this._selectedKey].find((key) => key !== null && keys.includes(key)) ?? keys[0] ?? null;
   }
 
   /** Fetches the next page of a level, or waits for the one being fetched. */
@@ -517,7 +551,18 @@ export class TfvTree extends LitElement {
   private _toggle(node: Node): void {
     const expanded = !node.expanded;
     this._setExpanded(node, expanded);
-    this.$server?.setExpanded(node.item.key, expanded);
+    this.$server?.setExpanded(expanded, node.item.key);
+  }
+
+  /** Expands the fetched siblings of an item, and the item itself, telling the server in one go. */
+  private _expandSiblings(node: Node): void {
+    const siblings = (node.parent?.children ?? this._root).nodes.filter(
+      (sibling) => sibling.item.expandable && !sibling.expanded,
+    );
+    if (siblings.length > 0) {
+      siblings.forEach((sibling) => this._setExpanded(sibling, true));
+      this.$server?.setExpanded(true, ...siblings.map((sibling) => sibling.item.key));
+    }
   }
 
   private _onLoadingRowsVisible(entries: IntersectionObserverEntry[]): void {
@@ -536,10 +581,6 @@ export class TfvTree extends LitElement {
     return key === null
       ? null
       : this.renderRoot.querySelector<HTMLElement>(`[role="treeitem"][data-key="${CSS.escape(key)}"]`);
-  }
-
-  private _itemElements(): HTMLElement[] {
-    return Array.from(this.renderRoot.querySelectorAll<HTMLElement>('[role="treeitem"]'));
   }
 
   /** Clicking the toggle of an item expands or collapses it; clicking elsewhere on it selects it. */
@@ -574,25 +615,82 @@ export class TfvTree extends LitElement {
     }
   }
 
+  /** Forgets the focused item when focus leaves the tree, so that coming back goes to the selected item. */
+  private _onFocusOut(event: FocusEvent): void {
+    const next = event.relatedTarget as Element | null;
+    if (!next || !(this.renderRoot.contains(next) || this.contains(next))) {
+      this._focusedKey = null;
+    }
+  }
+
   private _onKeyDown(event: KeyboardEvent): void {
-    const items = this._itemElements();
-    const last = items.length - 1;
-    const current = Math.max(
-      items.findIndex((item) => item.dataset.key === this._tabbableKey()),
-      0,
-    );
-    const target = {
-      ArrowDown: Math.min(current + 1, last),
-      ArrowUp: Math.max(current - 1, 0),
-      Home: 0,
-      End: last,
-    }[event.key];
-    if (target === undefined || last < 0) {
+    const key = (event.target as HTMLElement).closest<HTMLElement>('[role="treeitem"]')?.dataset.key;
+    const node = key === undefined ? undefined : this._nodes.get(key);
+    if (!node || this.disabled || event.altKey || event.ctrlKey || event.metaKey) {
+      return;
+    }
+    const visible = this._visibleNodes();
+    const index = visible.indexOf(node);
+    const rtl = this.matches(':dir(rtl)');
+    const forward = rtl ? 'ArrowLeft' : 'ArrowRight';
+    const backward = rtl ? 'ArrowRight' : 'ArrowLeft';
+    let target: Node | undefined;
+    if (event.key === 'ArrowDown') {
+      target = visible[index + 1];
+    } else if (event.key === 'ArrowUp') {
+      target = visible[index - 1];
+    } else if (event.key === 'Home') {
+      target = visible[0];
+    } else if (event.key === 'End') {
+      target = visible[visible.length - 1];
+    } else if (event.key === forward) {
+      if (node.item.expandable && !node.expanded) {
+        this._toggle(node);
+      } else if (node.expanded) {
+        target = node.children?.nodes[0];
+      }
+    } else if (event.key === backward) {
+      if (node.expanded) {
+        this._toggle(node);
+      } else {
+        target = node.parent ?? undefined;
+      }
+    } else if (event.key === 'Enter' || (event.key === ' ' && this._typed === '')) {
+      this._select(node);
+    } else if (event.key === '*') {
+      this._expandSiblings(node);
+    } else if ([...event.key].length === 1) {
+      target = this._typeAhead(event.key, visible, index);
+    } else {
       return;
     }
     event.preventDefault();
-    this._focusedKey = items[target].dataset.key ?? null;
-    items[target].focus();
+    if (target) {
+      this._focusedKey = target.item.key;
+      this._itemElement(target.item.key)?.focus();
+    }
+  }
+
+  /**
+   * Adds a typed character to the search, and finds the next visible item whose label
+   * starts with it: from the focused item on, or after it when only one character, or
+   * the same one again and again, was typed, which cycles through the items starting with it.
+   */
+  private _typeAhead(character: string, visible: Node[], index: number): Node | undefined {
+    clearTimeout(this._typedTimeout);
+    this._typedTimeout = setTimeout(() => (this._typed = ''), TYPE_AHEAD_TIMEOUT);
+    this._typed += character.toLocaleLowerCase();
+    const typed = [...this._typed];
+    const repeated = typed.every((typedCharacter) => typedCharacter === typed[0]);
+    const prefix = repeated ? typed[0] : this._typed;
+    const start = repeated ? index + 1 : index;
+    for (let i = 0; i < visible.length; i++) {
+      const candidate = visible[(start + i) % visible.length];
+      if (candidate.item.label.toLocaleLowerCase().startsWith(prefix)) {
+        return candidate;
+      }
+    }
+    return undefined;
   }
 }
 

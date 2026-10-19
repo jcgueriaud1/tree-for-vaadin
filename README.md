@@ -10,8 +10,8 @@ The words in bold below are defined in [GLOSSARY.md](GLOSSARY.md); the design de
 ## Status
 
 The tree shows its **root items**, and items can be **expanded** and **collapsed**, by the user (with the
-toggle in front of an item) or by the server. The user selects an item by clicking it. Keyboard navigation
-beyond moving focus up and down, and checkbox selection, are still to come.
+toggle in front of an item, or the keyboard) or by the server. The user selects an item by clicking it, or
+with Enter or Space. Checkbox selection is still to come.
 
 ## Usage
 
@@ -53,6 +53,26 @@ the value never expands anything. The ancestors of the selected item, its **sele
 data provider to implement `getParent`, as `TreeDataProvider` does, and is left out otherwise.
 `scrollToItem(item)` needs `getParent` too: it expands the item's ancestors and fetches the pages on the way
 down, then scrolls the item into view.
+
+### Keyboard
+
+The keys follow the [ARIA tree pattern](https://www.w3.org/WAI/ARIA/apg/patterns/treeview/), and selection
+does not follow focus: moving the **focused item** never changes the selected item.
+
+| Key | Does |
+| --- | --- |
+| Tab | Enters the tree, on the selected item if visible, else the first item: the tree is one tab stop |
+| Down / Up | Moves focus to the next / previous visible item |
+| Home / End | Moves focus to the first / last visible item |
+| Right | Expands a collapsed item; on an expanded item, moves focus to its first child item |
+| Left | Collapses an expanded item; otherwise moves focus to its parent |
+| Enter, Space | Selects the focused item |
+| `*` | Expands the focused item and its siblings, in one `ExpandEvent` |
+| Any character | Moves focus to the next visible item whose label starts with it; characters typed within half a second, spaces included, are searched together |
+
+Left and Right are swapped when the tree is right to left (`dir="rtl"`). Type-ahead only searches the items
+fetched and visible. When an item is collapsed while one of its descendants has focus, focus moves to it. The
+focused item has a focus ring; the selected item a background.
 
 ## Development
 

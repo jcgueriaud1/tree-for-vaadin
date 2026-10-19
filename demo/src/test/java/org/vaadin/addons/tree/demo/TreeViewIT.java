@@ -2,6 +2,7 @@ package org.vaadin.addons.tree.demo;
 
 import static com.microsoft.playwright.assertions.PlaywrightAssertions.assertThat;
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertNotEquals;
 
 import java.util.List;
 
@@ -229,6 +230,196 @@ class TreeViewIT {
     }
 
     @Test
+    void tabbingIntoTheTreeFocusesTheFirstItem() {
+        tabIntoFolders();
+
+        assertThat(item(folders(), "Documents")).isFocused();
+        assertEquals(List.of("0", "-1", "-1"), folders().getByRole(AriaRole.TREEITEM).all().stream()
+                .map(item -> item.getAttribute("tabindex")).toList());
+    }
+
+    @Test
+    void tabbingIntoTheTreeFocusesTheSelectedItemEvenAfterFocusMovedElsewhereInIt() {
+        item(folders(), "Music").click();
+        page.keyboard().press("ArrowDown");
+        assertThat(item(folders(), "Pictures")).isFocused();
+
+        tabIntoFolders();
+
+        assertThat(item(folders(), "Music")).isFocused();
+    }
+
+    @Test
+    void downAndUpMoveFocusAmongVisibleItemsWithoutSelecting() {
+        tabIntoFolders();
+
+        page.keyboard().press("ArrowDown");
+        assertThat(item(folders(), "Music")).isFocused();
+        page.keyboard().press("ArrowDown");
+        page.keyboard().press("ArrowDown");
+        assertThat(item(folders(), "Pictures")).isFocused();
+        page.keyboard().press("ArrowUp");
+        assertThat(item(folders(), "Music")).isFocused();
+
+        assertThat(folders().locator("[aria-selected=true]")).hasCount(0);
+    }
+
+    @Test
+    void homeAndEndMoveFocusToTheFirstAndLastVisibleItems() {
+        page.getByRole(AriaRole.BUTTON, new Page.GetByRoleOptions().setName("Expand all")).click();
+        assertThat(item(folders(), "Holidays")).isVisible();
+        tabIntoFolders();
+
+        page.keyboard().press("End");
+        assertThat(item(folders(), "Holidays")).isFocused();
+        page.keyboard().press("Home");
+        assertThat(item(folders(), "Documents")).isFocused();
+    }
+
+    @Test
+    void rightExpandsAnItemThenMovesToItsFirstChildItem() {
+        tabIntoFolders();
+
+        page.keyboard().press("ArrowRight");
+        assertThat(item(folders(), "Documents")).hasAttribute("aria-expanded", "true");
+        assertThat(item(folders(), "Documents")).isFocused();
+        assertThat(status()).hasText("Expanded Documents by the user");
+        assertThat(item(folders(), "Invoices")).isVisible();
+
+        page.keyboard().press("ArrowRight");
+        assertThat(item(folders(), "Invoices")).isFocused();
+
+        page.keyboard().press("ArrowRight");
+        assertThat(item(folders(), "Invoices")).isFocused();
+    }
+
+    @Test
+    void leftMovesToTheParentItemThenCollapsesIt() {
+        tabIntoFolders();
+        page.keyboard().press("ArrowRight");
+        assertThat(item(folders(), "Invoices")).isVisible();
+        page.keyboard().press("ArrowRight");
+        assertThat(item(folders(), "Invoices")).isFocused();
+
+        page.keyboard().press("ArrowLeft");
+        assertThat(item(folders(), "Documents")).isFocused();
+
+        page.keyboard().press("ArrowLeft");
+        assertThat(folders().getByRole(AriaRole.TREEITEM)).hasText(new String[] { "Documents", "Music", "Pictures" });
+        assertThat(status()).hasText("Collapsed Documents by the user");
+    }
+
+    @Test
+    void leftAndRightAreSwappedRightToLeft() {
+        folders().evaluate("tree => tree.dir = 'rtl'");
+        tabIntoFolders();
+
+        page.keyboard().press("ArrowLeft");
+        assertThat(item(folders(), "Invoices")).isVisible();
+        page.keyboard().press("ArrowLeft");
+        assertThat(item(folders(), "Invoices")).isFocused();
+
+        page.keyboard().press("ArrowRight");
+        assertThat(item(folders(), "Documents")).isFocused();
+        page.keyboard().press("ArrowRight");
+        assertThat(item(folders(), "Documents")).hasAttribute("aria-expanded", "false");
+    }
+
+    @Test
+    void enterAndSpaceSelectTheFocusedItem() {
+        tabIntoFolders();
+        page.keyboard().press("ArrowDown");
+
+        page.keyboard().press("Enter");
+        assertThat(item(folders(), "Music")).hasAttribute("aria-selected", "true");
+        assertThat(status()).hasText("Selected Music by the user");
+
+        page.keyboard().press("ArrowDown");
+        page.keyboard().press(" ");
+        assertThat(item(folders(), "Pictures")).hasAttribute("aria-selected", "true");
+        assertThat(item(folders(), "Music")).hasAttribute("aria-selected", "false");
+        assertThat(status()).hasText("Selected Pictures by the user");
+    }
+
+    @Test
+    void asteriskExpandsTheSiblingsOfTheFocusedItem() {
+        tabIntoFolders();
+
+        page.keyboard().press("*");
+
+        assertThat(folders().getByRole(AriaRole.TREEITEM)).hasText(new String[] { "Documents", "Invoices", "Letters",
+                "Music", "Jazz", "Classical", "Pictures", "Holidays" });
+        assertThat(status()).hasText("Expanded Documents, Music, Pictures by the user");
+        assertThat(item(folders(), "Documents")).isFocused();
+    }
+
+    @Test
+    void typingMovesFocusToTheNextVisibleItemStartingWithIt() {
+        tabIntoFolders();
+        page.keyboard().press("ArrowRight");
+        assertThat(item(folders(), "Letters")).isVisible();
+
+        page.keyboard().press("p");
+        assertThat(item(folders(), "Pictures")).isFocused();
+
+        // After a pause, a new search
+        page.waitForTimeout(600);
+        page.keyboard().press("l");
+        assertThat(item(folders(), "Letters")).isFocused();
+
+        // Letters is collapsed: its child items are not searched
+        page.waitForTimeout(600);
+        page.keyboard().press("2");
+        assertThat(item(folders(), "Letters")).isFocused();
+    }
+
+    @Test
+    void typingSeveralCharactersSearchesOnlyTheLoadedItems() {
+        Locator catalogue = page.getByRole(AriaRole.TREE, new Page.GetByRoleOptions().setName("Catalogue"));
+        item(catalogue, "Books").locator("[part=toggle]").click();
+        assertThat(catalogue.getByRole(AriaRole.TREEITEM)).hasCount(4 + 50);
+
+        page.keyboard().type("books item 4");
+        assertThat(item(catalogue, "Books item 4")).isFocused();
+
+        // Books item 51 is not loaded yet: focus stays on the last match, Books item 5
+        page.waitForTimeout(600);
+        page.keyboard().press("Home");
+        page.keyboard().type("books item 51");
+        assertThat(item(catalogue, "Books item 5")).isFocused();
+        assertThat(catalogue.getByRole(AriaRole.TREEITEM)).hasCount(4 + 50);
+    }
+
+    @Test
+    void theFocusedItemLooksDifferentFromTheSelectedItem() {
+        tabIntoFolders();
+        page.keyboard().press("Enter");
+        page.keyboard().press("ArrowDown");
+
+        Locator selected = item(folders(), "Documents");
+        Locator focused = item(folders(), "Music");
+        assertThat(focused).isFocused();
+        assertEquals("none", style(selected, "outline-style"));
+        assertEquals("solid", style(focused, "outline-style"));
+        assertEquals("rgba(0, 0, 0, 0)", style(focused, "background-color"));
+        assertNotEquals("rgba(0, 0, 0, 0)", style(selected, "background-color"));
+    }
+
+    @Test
+    void focusMovesToTheParentWhenTheServerCollapsesTheParentOfTheFocusedItem() {
+        page.getByRole(AriaRole.BUTTON, new Page.GetByRoleOptions().setName("Expand all")).click();
+        assertThat(item(folders(), "2026")).isVisible();
+        item(folders(), "2026").focus();
+
+        // Clicked without taking focus away from the tree
+        page.getByRole(AriaRole.BUTTON, new Page.GetByRoleOptions().setName("Collapse all"))
+                .evaluate("button => button.click()");
+
+        assertThat(folders().getByRole(AriaRole.TREEITEM)).hasText(new String[] { "Documents", "Music", "Pictures" });
+        assertThat(item(folders(), "Documents")).isFocused();
+    }
+
+    @Test
     void thePageHasNoAccessibilityViolations() {
         page.getByRole(AriaRole.BUTTON, new Page.GetByRoleOptions().setName("Expand all")).click();
         assertThat(item(folders(), "Holidays")).isVisible();
@@ -248,6 +439,17 @@ class TreeViewIT {
         assertThat(item(folders(), label)).hasAttribute("selection-path", "");
         assertThat(item(folders(), label).locator("[part=selection-path-marker]")).isVisible();
         assertThat(item(folders(), label)).hasAttribute("aria-selected", "false");
+    }
+
+    /** Tabs from the button just before the folders tree into it, once its items are there. */
+    private void tabIntoFolders() {
+        assertThat(item(folders(), "Documents")).isVisible();
+        page.getByRole(AriaRole.BUTTON, new Page.GetByRoleOptions().setName("Clear selection")).focus();
+        page.keyboard().press("Tab");
+    }
+
+    private static String style(Locator item, String property) {
+        return (String) item.evaluate("(item, property) => getComputedStyle(item).getPropertyValue(property)", property);
     }
 
     private Locator status() {

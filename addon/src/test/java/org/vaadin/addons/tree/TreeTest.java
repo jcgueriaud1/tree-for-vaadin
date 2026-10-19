@@ -203,9 +203,9 @@ class TreeTest extends BrowserlessTest {
         String documentsKey = tree.fetchChildren(null, 0, 50).items().get(0).key();
         List<ComponentEvent<?>> events = recordEvents();
 
-        tree.setExpanded(documentsKey, true);
+        tree.setExpanded(true, documentsKey);
         assertTrue(tree.isExpanded(docs));
-        tree.setExpanded(documentsKey, false);
+        tree.setExpanded(false, documentsKey);
         assertFalse(tree.isExpanded(docs));
 
         assertEquals(2, events.size());
@@ -216,10 +216,22 @@ class TreeTest extends BrowserlessTest {
     }
 
     @Test
+    void theUserExpandingSiblingsFiresOneEventForThemAll() {
+        List<String> keys = tree.fetchChildren(null, 0, 50).items().stream().map(TreeItem::key).toList();
+        List<ComponentEvent<?>> events = recordEvents();
+
+        tree.setExpanded(true, keys.get(0), "unknown", keys.get(1));
+
+        assertEquals(1, events.size());
+        assertEquals(List.of(docs, music), ((ExpandEvent<?>) events.get(0)).getItems());
+        assertTrue(events.get(0).isFromClient());
+    }
+
+    @Test
     void theUserExpandingAnItemNoLongerKnownIsIgnored() {
         List<ComponentEvent<?>> events = recordEvents();
 
-        tree.setExpanded("unknown", true);
+        tree.setExpanded(true, "unknown");
 
         assertTrue(events.isEmpty());
     }

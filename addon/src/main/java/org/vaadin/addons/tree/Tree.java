@@ -441,19 +441,20 @@ public class Tree<T> extends Component
     }
 
     /**
-     * Expands or collapses an item, as the user did in the browser.
+     * Expands or collapses items, as the user did in the browser: one item
+     * with its toggle or the arrow keys, or the siblings of an item with
+     * {@code *}. Fires one event for all of them.
      *
-     * @param key
-     *            the key of the item; an item no longer known is ignored
      * @param expanded
-     *            {@code true} to expand the item, {@code false} to collapse it
+     *            {@code true} to expand the items, {@code false} to collapse
+     *            them
+     * @param keys
+     *            the keys of the items; items no longer known are ignored
      */
     @ClientCallable
-    void setExpanded(String key, boolean expanded) {
-        T item = keyMapper.get(key);
-        if (item != null) {
-            setExpanded(List.of(item), expanded, true);
-        }
+    void setExpanded(boolean expanded, String... keys) {
+        List<T> items = Arrays.stream(keys).map(keyMapper::get).filter(Objects::nonNull).toList();
+        setExpanded(items, expanded, true);
     }
 
     /**
