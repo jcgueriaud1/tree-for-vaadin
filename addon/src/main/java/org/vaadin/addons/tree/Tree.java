@@ -27,6 +27,8 @@ import com.vaadin.flow.component.dependency.JsModule;
 import com.vaadin.flow.component.dependency.Uses;
 import com.vaadin.flow.component.icon.Icon;
 import com.vaadin.flow.component.shared.HasTooltip;
+import com.vaadin.flow.data.provider.DataChangeEvent;
+import com.vaadin.flow.data.provider.DataChangeEvent.DataRefreshEvent;
 import com.vaadin.flow.data.provider.KeyMapper;
 import com.vaadin.flow.data.provider.hierarchy.HierarchicalDataProvider;
 import com.vaadin.flow.data.provider.hierarchy.HierarchicalQuery;
@@ -56,6 +58,16 @@ import com.vaadin.flow.shared.Registration;
  * <p>
  * Each item can show an icon in front of its label, and a tooltip, from
  * {@link #setItemIconGenerator} and {@link #setItemTooltipGenerator}.
+ * <p>
+ * When the data changes, {@link HierarchicalDataProvider#refreshAll()} has the
+ * browser fetch the items again: items that still exist, by their id, stay
+ * expanded, and the value is kept even if its item is gone, for the app to
+ * clear. {@link HierarchicalDataProvider#refreshItem(Object, boolean)} updates
+ * one item, and fetches its child items again if asked to. If fetching child
+ * items fails, the exception goes to the session's
+ * {@link com.vaadin.flow.server.ErrorHandler ErrorHandler}, which logs it by
+ * default, and the item collapses back while its group briefly shows an
+ * error. The texts the tree shows by itself are set with {@link #setI18n}.
  *
  * <pre>{@code
  * Tree<Folder> tree = new Tree<>();
@@ -94,7 +106,7 @@ public class Tree<T> extends Component
      * selection path.
      */
     record TreeItem(String key, String label, String icon, String tooltip, boolean expandable, boolean expanded,
-            boolean selected, boolean onSelectionPath) {
+            boolean selected, boolean onSelectionPath) implements Serializable {
     }
 
     /** A page of child items, with the number of children the parent has in all. */
@@ -116,6 +128,7 @@ public class Tree<T> extends Component
     /** The ancestors of the selected item, and their ids. */
     private List<T> selectionPath = List.of();
     private Set<Object> selectionPathIds = Set.of();
+    private TreeI18n i18n = new TreeI18n();
 
     /** Creates an empty tree. */
     public Tree() {
@@ -252,6 +265,28 @@ public class Tree<T> extends Component
      */
     public int getPageSize() {
         return pageSize;
+    }
+
+    /**
+     * Sets the texts the tree shows by itself: while loading, when it has no
+     * items, and when fetching items fails. They are in English by default.
+     * Changes made to the object afterwards take effect when it is set again.
+     *
+     * @param i18n
+     *            the texts, not {@code null}
+     */
+    public void setI18n(TreeI18n i18n) {
+        this.i18n = Objects.requireNonNull(i18n, "i18n");
+        getElement().setPropertyBean("i18n", i18n);
+    }
+
+    /**
+     * Gets the texts the tree shows by itself.
+     *
+     * @return the texts, never {@code null}
+     */
+    public TreeI18n getI18n() {
+        return i18n;
     }
 
     /**
@@ -435,7 +470,10 @@ public class Tree<T> extends Component
         fireEvent(new ComponentValueChangeEvent<>(this, singleSelect, oldItem, fromClient));
     }
 
-    /** The selection path is shown only if the data provider can tell the parent of an item. */
+    /**
+     * The selection path is shown only if the data provider can tell the parent
+     * of an item, and the selected item is still in the data.
+     */
     private void updateSelectionPath() {
         selectionPath = List.of();
         if (selectedItem != null) {
@@ -443,6 +481,8 @@ public class Tree<T> extends Component
                 selectionPath = ancestors(selectedItem);
             } catch (UnsupportedOperationException e) {
                 // Documented: no selection path without getParent
+            } catch (IllegalArgumentException e) {
+                // The selected item is gone from the data, as TreeData tells; the app clears the value
             }
         }
         selectionPathIds = new HashSet<>(selectionPath.stream().map(dataProvider::getId).toList());
@@ -521,6 +561,8 @@ public class Tree<T> extends Component
      * Fetches a page of the child items of a parent, for the browser.
      * <p>
      * Allowed while the tree is disabled: a disabled tree still shows its items.
+     * An exception from the data provider is left to Flow, which rejects the
+     * browser's promise and hands the exception to the session's error handler.
      *
      * @param parentKey
      *            the key of the parent item, or {@code null} for the root items
@@ -548,17 +590,18 @@ public class Tree<T> extends Component
 
     private <F> ItemPage fetchChildren(HierarchicalDataProvider<T, F> provider, T parent, int offset, int limit) {
         int size = provider.getChildCount(new HierarchicalQuery<>(null, parent));
-        Object selectedId = idOf(selectedItem);
         List<TreeItem> items = provider
                 .fetchChildren(new HierarchicalQuery<>(offset, limit, List.of(), null, null, parent))
-                .map(item -> {
-                    Object id = provider.getId(item);
-                    return new TreeItem(keyMapper.key(item), itemLabelGenerator.apply(item),
-                            itemIconGenerator.apply(item), itemTooltipGenerator.apply(item), provider.hasChildren(item),
-                            isExpanded(item), Objects.equals(id, selectedId), selectionPathIds.contains(id));
-                })
+                .map(this::treeItem)
                 .toList();
         return new ItemPage(items, size);
+    }
+
+    private TreeItem treeItem(T item) {
+        Object id = dataProvider.getId(item);
+        return new TreeItem(keyMapper.key(item), itemLabelGenerator.apply(item), itemIconGenerator.apply(item),
+                itemTooltipGenerator.apply(item), dataProvider.hasChildren(item), isExpanded(item),
+                Objects.equals(id, idOf(selectedItem)), selectionPathIds.contains(id));
     }
 
     /**
@@ -577,7 +620,28 @@ public class Tree<T> extends Component
         if (dataProviderListener != null) {
             dataProviderListener.remove();
         }
-        dataProviderListener = dataProvider.addDataProviderListener(event -> refresh());
+        dataProviderListener = dataProvider.addDataProviderListener(this::onDataChange);
+    }
+
+    private void onDataChange(DataChangeEvent<T> event) {
+        if (event instanceof DataRefreshEvent<T> refreshEvent) {
+            refreshItem(refreshEvent.getItem(), refreshEvent.isRefreshChildren());
+        } else {
+            refresh();
+        }
+    }
+
+    /**
+     * Sends the browser an item again, and has it fetch the item's child items
+     * again if asked to. An item the browser has not fetched comes up to date
+     * when it does.
+     */
+    private void refreshItem(T item, boolean refreshChildren) {
+        if (!keyMapper.has(item)) {
+            return;
+        }
+        keyMapper.refresh(item);
+        getElement().callJsFunction("refreshItem", treeItem(item), refreshChildren);
     }
 
     @Override

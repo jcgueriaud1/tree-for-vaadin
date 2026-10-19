@@ -2,7 +2,9 @@ import { expect, fixture, html, nextFrame, waitUntil } from '@open-wc/testing';
 import { resetMouse, sendKeys, sendMouse } from '@web/test-runner-commands';
 import { Tooltip } from '@vaadin/tooltip/src/vaadin-tooltip.js';
 import {
+  DEFAULT_I18N,
   type ItemPage,
+  LOAD_ERROR_DURATION,
   PAGE_SIZE,
   TYPE_AHEAD_TIMEOUT,
   type TfvTree,
@@ -25,6 +27,8 @@ type FakeServer = TreeServer & {
   /** The icon and tooltip of items, by label; items not in them have none. */
   icons: Record<string, string>;
   tooltips: Record<string, string>;
+  /** The keys of the parents whose child items fail to load, null for the root items. */
+  failing: (string | null)[];
   /** While true, fetches wait until release() is called. */
   hold: boolean;
   release(): void;
@@ -55,6 +59,7 @@ function serverWith(roots: FakeItem[]): FakeServer {
     selectionPath: [],
     icons: {},
     tooltips: {},
+    failing: [],
     hold: false,
     release() {
       const resolve = waiting;
@@ -65,6 +70,9 @@ function serverWith(roots: FakeItem[]): FakeServer {
       server.calls.push([parentKey, offset, limit]);
       if (server.hold) {
         await new Promise<void>((resolve) => waiting.push(resolve));
+      }
+      if (server.failing.includes(parentKey)) {
+        throw new Error(`Cannot load ${parentKey}`);
       }
       const level = children(parentKey);
       const items = level.slice(offset, offset + limit).map((item, i) => {
@@ -128,6 +136,18 @@ function item(tree: TfvTree, label: string): HTMLElement {
 
 function loadingRows(tree: TfvTree): HTMLElement[] {
   return Array.from(tree.shadowRoot!.querySelectorAll<HTMLElement>('[part="loading"]'));
+}
+
+function messageRows(tree: TfvTree, part: 'empty' | 'error'): HTMLElement[] {
+  return Array.from(tree.shadowRoot!.querySelectorAll<HTMLElement>(`[part="${part}"]`));
+}
+
+/** Waits for Vaadin's live region to announce the given text as an alert. */
+async function announced(text: string): Promise<void> {
+  await waitUntil(
+    () => Array.from(document.body.children).some((element) => element.getAttribute('role') === 'alert' && element.textContent === text),
+    `"${text}" announced`,
+  );
 }
 
 async function clickLabel(tree: TfvTree, label: string): Promise<void> {
@@ -984,6 +1004,179 @@ describe('tfv-tree', () => {
       await settle(tree);
 
       expect(tooltip(tree).opened).to.equal(false);
+    });
+  });
+
+  describe('data changes and errors', () => {
+    it('shows the empty text when there are no items, and is described by it', async () => {
+      const tree = await treeWith(serverWith([]));
+
+      const [empty] = messageRows(tree, 'empty');
+      expect(empty.textContent!.trim()).to.equal('No items');
+      expect(empty.getAttribute('aria-hidden')).to.equal('true');
+      expect(tree.getAttribute('aria-description')).to.equal('No items');
+      expect(loadingRows(tree)).to.be.empty;
+      await expect(tree).to.be.accessible();
+    });
+
+    it('stops being described as empty once it has items', async () => {
+      const roots: FakeItem[] = [];
+      const tree = await treeWith(serverWith(roots));
+
+      roots.push('Documents');
+      await tree.refresh();
+      await settle(tree);
+
+      expect(messageRows(tree, 'empty')).to.be.empty;
+      expect(tree.hasAttribute('aria-description')).to.be.false;
+    });
+
+    it('keeps the description the app gives it while empty', async () => {
+      const tree = await treeWith(serverWith([]), (element) => element.setAttribute('aria-description', 'Your folders'));
+
+      expect(messageRows(tree, 'empty')).to.have.length(1);
+      expect(tree.getAttribute('aria-description')).to.equal('Your folders');
+    });
+
+    it('collapses an item back when its child items fail to load, and briefly shows and announces the error', async function () {
+      this.timeout(LOAD_ERROR_DURATION + 3000);
+      const server = serverWith(FOLDERS);
+      server.failing = ['0'];
+      const tree = await treeWith(server);
+
+      await clickToggle(tree, 'Documents');
+
+      expect(item(tree, 'Documents').getAttribute('aria-expanded')).to.equal('false');
+      expect(server.expansions).to.deep.equal([
+        ['0', true],
+        ['0', false],
+      ]);
+      const [error] = messageRows(tree, 'error');
+      expect(error.textContent!.trim()).to.equal('Could not load the items');
+      expect(error.getAttribute('aria-level')).to.be.null;
+      expect(error.getAttribute('aria-hidden')).to.equal('true');
+      expect(error.previousElementSibling).to.equal(item(tree, 'Documents'));
+      await announced('Could not load the items');
+      await expect(tree).to.be.accessible();
+
+      await waitUntil(() => messageRows(tree, 'error').length === 0, 'error hidden', {
+        timeout: LOAD_ERROR_DURATION + 1000,
+      });
+    });
+
+    it('fetches the child items again when expanded again after failing', async () => {
+      const server = serverWith(FOLDERS);
+      server.failing = ['0'];
+      const tree = await treeWith(server);
+      await clickToggle(tree, 'Documents');
+
+      server.failing = [];
+      await clickToggle(tree, 'Documents');
+
+      expect(messageRows(tree, 'error')).to.be.empty;
+      expect(labels(tree)).to.deep.equal(['Documents', 'Invoices', 'Letters', 'Music', 'Pictures']);
+    });
+
+    it('shows the error in place of the root items when they fail to load, until refreshed', async () => {
+      const server = serverWith(FOLDERS);
+      server.failing = [null];
+      const tree = await treeWith(server);
+
+      expect(messageRows(tree, 'error')).to.have.length(1);
+      expect(loadingRows(tree)).to.be.empty;
+      expect(messageRows(tree, 'empty')).to.be.empty;
+      expect(tree.hasAttribute('aria-busy')).to.be.false;
+      await announced('Could not load the items');
+
+      server.failing = [];
+      await tree.refresh();
+      await settle(tree);
+
+      expect(messageRows(tree, 'error')).to.be.empty;
+      expect(labels(tree)).to.deep.equal(['Documents', 'Music', 'Pictures']);
+    });
+
+    it('updates an item the server refreshes, leaving its child items as they are', async () => {
+      const server = serverWith(FOLDERS);
+      const tree = await treeWith(server);
+      await clickToggle(tree, 'Documents');
+      server.calls = [];
+
+      tree.refreshItem({ ...(await server.fetchChildren(null, 0, 1)).items[0], label: 'Docs', expanded: true }, false);
+      await settle(tree);
+
+      expect(labels(tree)).to.deep.equal(['Docs', 'Invoices', 'Letters', 'Music', 'Pictures']);
+      expect(server.calls).to.deep.equal([[null, 0, 1]]);
+    });
+
+    it('fetches the child items of an item again when the server refreshes them, keeping focus on the item', async () => {
+      const documents: FakeItem = ['Documents', ['Invoices', 'Letters'], true];
+      const server = serverWith([documents, 'Music']);
+      const tree = await treeWith(server);
+      tree.focus();
+      await press(tree, 'ArrowDown');
+      expect(focusedLabel(tree)).to.equal('Invoices');
+
+      documents[1] = ['Receipts'];
+      tree.refreshItem((await server.fetchChildren(null, 0, 1)).items[0], true);
+      await settle(tree);
+
+      expect(labels(tree)).to.deep.equal(['Documents', 'Receipts', 'Music']);
+      expect(focusedLabel(tree)).to.equal('Documents');
+    });
+
+    it('collapses an item the server refreshes once it has no child items', async () => {
+      const documents: FakeItem = ['Documents', ['Invoices'], true];
+      const server = serverWith([documents]);
+      const tree = await treeWith(server);
+
+      documents[1] = [];
+      tree.refreshItem((await server.fetchChildren(null, 0, 1)).items[0], false);
+      await settle(tree);
+
+      expect(labels(tree)).to.deep.equal(['Documents']);
+      expect(item(tree, 'Documents').hasAttribute('aria-expanded')).to.be.false;
+    });
+
+    it('ignores the server refreshing an item it has not fetched', async () => {
+      const tree = await treeWith(serverWith(FOLDERS));
+
+      const letters = { key: '0/1', label: 'Mail', icon: null, tooltip: null, expandable: true, expanded: true };
+      tree.refreshItem({ ...letters, selected: false, onSelectionPath: false }, true);
+      await settle(tree);
+
+      expect(labels(tree)).to.deep.equal(['Documents', 'Music', 'Pictures']);
+    });
+
+    it('shows the texts the server sets', async () => {
+      const server = serverWith([['Documents', ['Invoices']]]);
+      server.failing = ['0'];
+      const tree = await treeWith(server, (element) => {
+        element.i18n = { loading: 'Ladataan…', empty: 'Ei kohteita', loadError: 'Lataus epäonnistui' };
+      });
+
+      server.hold = true;
+      const refreshed = tree.refresh();
+      await tree.updateComplete;
+      expect(loadingRows(tree)[0].textContent!.trim()).to.equal('Ladataan…');
+      server.hold = false;
+      server.release();
+      await refreshed;
+      await settle(tree);
+
+      await clickToggle(tree, 'Documents');
+      expect(messageRows(tree, 'error')[0].textContent!.trim()).to.equal('Lataus epäonnistui');
+      await announced('Lataus epäonnistui');
+
+      const empty = await treeWith(serverWith([]), (element) => (element.i18n = tree.i18n));
+      expect(messageRows(empty, 'empty')[0].textContent!.trim()).to.equal('Ei kohteita');
+      expect(empty.getAttribute('aria-description')).to.equal('Ei kohteita');
+    });
+
+    it('shows English texts unless the server sets others', async () => {
+      const tree = await treeWith(serverWith([]));
+
+      expect(tree.i18n).to.deep.equal(DEFAULT_I18N);
     });
   });
 

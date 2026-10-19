@@ -13,6 +13,7 @@ import java.util.List;
 import java.util.stream.IntStream;
 import java.util.stream.Stream;
 
+import tools.jackson.databind.JsonNode;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
@@ -137,6 +138,37 @@ class TreeTest extends BrowserlessTest {
         assertEquals(1, calls("refresh").size());
         tree.setItemTooltipGenerator(Folder::name);
         assertEquals(1, calls("refresh").size());
+    }
+
+    @Test
+    void theTextsAreInEnglishUnlessSet() {
+        TreeI18n i18n = tree.getI18n();
+
+        assertEquals("Loading…", i18n.getLoading());
+        assertEquals("No items", i18n.getEmpty());
+        assertEquals("Could not load the items", i18n.getLoadError());
+    }
+
+    @Test
+    void theTextsSetAreSentToTheBrowser() {
+        TreeI18n i18n = new TreeI18n().setLoading("Ladataan…").setEmpty("Ei kohteita")
+                .setLoadError("Lataus epäonnistui");
+
+        tree.setI18n(i18n);
+
+        assertEquals(i18n, tree.getI18n());
+        JsonNode sent = (JsonNode) tree.getElement().getPropertyRaw("i18n");
+        assertEquals("Ladataan…", sent.get("loading").asString());
+        assertEquals("Ei kohteita", sent.get("empty").asString());
+        assertEquals("Lataus epäonnistui", sent.get("loadError").asString());
+    }
+
+    @Test
+    void theTextsAreNotNull() {
+        assertThrows(NullPointerException.class, () -> tree.setI18n(null));
+        assertThrows(NullPointerException.class, () -> new TreeI18n().setLoading(null));
+        assertThrows(NullPointerException.class, () -> new TreeI18n().setEmpty(null));
+        assertThrows(NullPointerException.class, () -> new TreeI18n().setLoadError(null));
     }
 
     @Test
@@ -317,6 +349,80 @@ class TreeTest extends BrowserlessTest {
     }
 
     @Test
+    void itemsStillInTheDataStayExpandedWhenOthersAreRemoved() {
+        TreeData<Folder> data = new TreeData<>();
+        data.addRootItems(docs, music);
+        data.addItem(docs, letters);
+        data.addItem(music, new Folder("Jazz"));
+        tree.setItems(data);
+        tree.expand(docs, music);
+
+        data.removeItem(music);
+        tree.getDataProvider().refreshAll();
+
+        List<TreeItem> roots = tree.fetchChildren(null, 0, 50).items();
+        assertEquals(List.of("Documents"), roots.stream().map(TreeItem::label).toList());
+        assertTrue(roots.get(0).expanded());
+    }
+
+    @Test
+    void refreshingAllHasTheBrowserFetchTheItemsAgain() {
+        tree.fetchChildren(null, 0, 50);
+        calls("refresh");
+
+        tree.getDataProvider().refreshAll();
+
+        assertEquals(1, calls("refresh").size());
+    }
+
+    @Test
+    void refreshingAnItemSendsItToTheBrowserAgain() {
+        TreeData<Folder> data = new TreeData<>();
+        data.addRootItems(docs);
+        tree.setItems(data);
+        tree.setItemTooltipGenerator(Folder::name);
+        String documentsKey = key(docs);
+        calls("refresh");
+
+        data.addItem(docs, letters);
+        tree.getDataProvider().refreshItem(docs, true);
+        tree.getDataProvider().refreshItem(docs);
+
+        // Both refresh and refreshItem: no refresh of all the items, which has no arguments
+        List<List<Object>> calls = calls("refresh");
+        assertEquals(2, calls.size());
+        TreeItem documents = (TreeItem) calls.get(0).get(0);
+        assertEquals(documentsKey, documents.key());
+        assertEquals("Documents", documents.tooltip());
+        assertTrue(documents.expandable(), "it has a child item now");
+        assertEquals(true, calls.get(0).get(1), "its child items are fetched again");
+        assertEquals(false, calls.get(1).get(1));
+    }
+
+    @Test
+    void refreshingAnItemTheBrowserHasNotFetchedTellsTheBrowserNothing() {
+        tree.fetchChildren(null, 0, 50);
+        calls("refresh");
+
+        tree.getDataProvider().refreshItem(letters, true);
+
+        assertEquals(List.of(), calls("refresh"));
+    }
+
+    @Test
+    void anExceptionFetchingChildItemsIsLeftToFlowsErrorHandling() {
+        Tree<Folder> failing = new Tree<>();
+        failing.setDataProvider(new BackendWithoutGetParent() {
+            @Override
+            protected Stream<Folder> fetchChildrenFromBackEnd(HierarchicalQuery<Folder, Void> query) {
+                throw new IllegalStateException("The backend is down");
+            }
+        });
+
+        assertThrows(IllegalStateException.class, () -> failing.fetchChildren(null, 0, 50));
+    }
+
+    @Test
     void newItemsStartCollapsed() {
         tree.expand(docs);
 
@@ -489,6 +595,23 @@ class TreeTest extends BrowserlessTest {
         assertNull(tree.asSingleSelect().getValue());
         assertEquals(1, events.size());
         assertFalse(events.get(0).isFromClient());
+    }
+
+    @Test
+    void theValueIsKeptWhenItsItemIsRemovedFromTheData() {
+        TreeData<Folder> data = new TreeData<>();
+        data.addRootItems(docs);
+        data.addItem(docs, letters);
+        tree.setItems(data);
+        tree.asSingleSelect().setValue(letters);
+        List<ComponentValueChangeEvent<Tree<Folder>, Folder>> events = recordValueChanges();
+
+        data.removeItem(letters);
+        tree.getDataProvider().refreshAll();
+
+        assertEquals(letters, tree.asSingleSelect().getValue(), "the app clears it");
+        assertEquals(List.of(), events);
+        assertFalse(tree.fetchChildren(null, 0, 50).items().get(0).onSelectionPath());
     }
 
     @Test

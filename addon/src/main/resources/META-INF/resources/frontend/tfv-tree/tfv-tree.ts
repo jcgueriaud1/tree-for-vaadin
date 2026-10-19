@@ -1,5 +1,6 @@
 import { css, html, LitElement, nothing, type PropertyValues } from 'lit';
 import { repeat } from 'lit/directives/repeat.js';
+import { announce } from '@vaadin/a11y-base/src/announce.js';
 
 /**
  * An item as the server sends it: the key to refer to it by, its label, its icon and
@@ -51,8 +52,24 @@ interface Tooltip extends HTMLElement {
   };
 }
 
-/** The text shown while the items of a level are being fetched. */
-const LOADING = 'Loading…';
+/** The texts the tree shows by itself, see TreeI18n.java. */
+export interface TreeI18n {
+  /** Shown while the items of a level are being fetched. */
+  loading: string;
+  /** Shown when the tree has no items, and its accessible description then. */
+  empty: string;
+  /** Shown, and announced, when fetching items fails. */
+  loadError: string;
+}
+
+export const DEFAULT_I18N: TreeI18n = {
+  loading: 'Loading…',
+  empty: 'No items',
+  loadError: 'Could not load the items',
+};
+
+/** How long the group of an item whose child items failed to load shows the error, in milliseconds. */
+export const LOAD_ERROR_DURATION = 3000;
 
 /** The child items of a parent (or the root items) fetched so far. */
 interface Level {
@@ -63,6 +80,8 @@ interface Level {
   size: number;
   /** The page being fetched, if any. */
   loading: Promise<void> | null;
+  /** Whether fetching a page failed: no more pages are fetched until the level is fetched again. */
+  failed: boolean;
 }
 
 /** An item fetched from the server, where it sits in the tree. */
@@ -91,18 +110,23 @@ function pointTooltip(tooltip: Tooltip, element: HTMLElement, text: string): voi
   tooltip.text = text;
 }
 
-/** A row of the tree: a visible item, or the row standing for the items of a level not fetched yet. */
+/**
+ * A row of the tree: a visible item, the row standing for the items of a level not
+ * fetched yet, or a message in place of items: that there are none, or that they
+ * failed to load.
+ */
 type Row =
   | { kind: 'item'; node: Node; position: number; setSize: number }
-  | { kind: 'loading'; level: Level; depth: number };
+  | { kind: 'loading'; level: Level; depth: number }
+  | { kind: 'empty' | 'error'; parentKey: string; depth: number };
 
 function newLevel(parent: Node | null): Level {
-  return { parent, nodes: [], size: -1, loading: null };
+  return { parent, nodes: [], size: -1, loading: null, failed: false };
 }
 
 /** Tells whether there are items of the level still to fetch. */
 function hasMore(level: Level): boolean {
-  return level.size < 0 || level.nodes.length < level.size;
+  return !level.failed && (level.size < 0 || level.nodes.length < level.size);
 }
 
 /**
@@ -131,12 +155,21 @@ function hasMore(level: Level): boolean {
  * focused with the keyboard. The tooltip is hidden from assistive technology, as a
  * tree only holds treeitems; its text is the item's `aria-describedby` instead, from a
  * hidden copy, so the item is described whether or not the tooltip shows.
+ *
+ * The server updates an item with `refreshItem`, and has the tree fetch everything
+ * again with `refresh`. If fetching the child items of an item fails, the item
+ * collapses back, the server is told, and its group shows the error for
+ * `LOAD_ERROR_DURATION`; if fetching root items fails, the error stays until the next
+ * refresh. Errors are announced through Vaadin's live region. An empty tree shows the
+ * empty text, which is also its `aria-description` while empty. The texts come from
+ * `i18n`.
  */
 export class TfvTree extends LitElement {
   static override properties = {
     disabled: { type: Boolean, reflect: true },
     readonly: { type: Boolean },
     pageSize: { type: Number },
+    i18n: { type: Object, attribute: false },
     _focusedKey: { state: true },
     _focusRing: { state: true },
     _selectedKey: { state: true },
@@ -173,6 +206,7 @@ export class TfvTree extends LitElement {
       --tfv-tree-icon-size: var(--lumo-icon-size-s, var(--vaadin-icon-size, 1.125em));
       --tfv-tree-icon-color: var(--tfv-tree-secondary-text-color);
       --tfv-tree-toggle-color: var(--tfv-tree-secondary-text-color);
+      --tfv-tree-error-text-color: var(--aura-red-text, var(--lumo-error-text-color, var(--tfv-tree-text-color)));
 
       display: block;
       overflow: auto;
@@ -282,13 +316,19 @@ export class TfvTree extends LitElement {
       background: var(--tfv-tree-selection-path-color);
     }
 
-    [part='loading'] {
+    [part='loading'],
+    [part='empty'],
+    [part='error'] {
       padding-block: var(--tfv-tree-item-padding-block);
       padding-inline-start: calc(
         var(--_level) * var(--tfv-tree-indent) + var(--tfv-tree-item-padding-inline) + 1em + var(--tfv-tree-item-gap)
       );
       font-size: 0.875em;
       color: var(--tfv-tree-secondary-text-color);
+    }
+
+    [part='error'] {
+      color: var(--tfv-tree-error-text-color);
     }
 
     @media (forced-colors: active) {
@@ -313,6 +353,8 @@ export class TfvTree extends LitElement {
   /** Set by the server when the value is read-only: the user cannot change the selection. */
   declare readonly: boolean;
   declare pageSize: number;
+  /** The texts the tree shows by itself, set by the server. */
+  declare i18n: TreeI18n;
   declare $server?: TreeServer;
   /** The key of the item that has focus, or null while focus is outside the tree. */
   declare _focusedKey: string | null;
@@ -325,6 +367,13 @@ export class TfvTree extends LitElement {
 
   private _root: Level = newLevel(null);
   private _nodes = new Map<string, Node>();
+
+  /** The keys of the collapsed items whose group shows that their child items failed to load. */
+  private _failedKeys = new Set<string>();
+  private _failedTimeouts = new Map<string, ReturnType<typeof setTimeout>>();
+
+  /** Whether the tree set its own `aria-description`, to the empty text. */
+  private _describedAsEmpty = false;
 
   /** Ignores the answers to fetches made before the latest refresh. */
   private _generation = 0;
@@ -347,6 +396,7 @@ export class TfvTree extends LitElement {
     this.disabled = false;
     this.readonly = false;
     this.pageSize = PAGE_SIZE;
+    this.i18n = DEFAULT_I18N;
     this._focusedKey = null;
     this._focusRing = false;
     this._selectedKey = null;
@@ -369,6 +419,7 @@ export class TfvTree extends LitElement {
     clearTimeout(this._typedTimeout);
     this._typed = '';
     this._closeTooltip();
+    this._clearLoadErrors();
     super.disconnectedCallback();
   }
 
@@ -377,10 +428,31 @@ export class TfvTree extends LitElement {
     this._generation++;
     this._root = newLevel(null);
     this._nodes.clear();
+    this._clearLoadErrors();
     // The items fetched again tell which are selected
     this._selectedKey = null;
     this._selectionPath = new Set();
     await this._fetchNextPage(this._root);
+  }
+
+  /**
+   * Updates an item the browser has fetched, and fetches its child items again if
+   * asked to, or if it no longer has any. Called by the server.
+   */
+  refreshItem(item: TreeItem, refreshChildren: boolean): void {
+    const node = this._nodes.get(item.key);
+    if (!node) {
+      return;
+    }
+    node.item = item;
+    node.expanded = item.expandable && item.expanded;
+    if (refreshChildren || !item.expandable) {
+      this._forgetChildren(node);
+      if (node.expanded) {
+        this._fetchChildren(node);
+      }
+    }
+    this.requestUpdate();
   }
 
   /** Expands or collapses an item the browser has fetched. Called by the server. */
@@ -464,6 +536,7 @@ export class TfvTree extends LitElement {
     } else {
       this.removeAttribute('aria-busy');
     }
+    this._updateEmptyDescription();
     this._updateTooltip();
     const observer = this._loadingRowObserver;
     if (observer) {
@@ -488,8 +561,18 @@ export class TfvTree extends LitElement {
       >
         ${repeat(
           rows,
-          (row) => (row.kind === 'item' ? row.node.item.key : `loading:${row.level.parent?.item.key ?? ''}`),
-          (row) => (row.kind === 'item' ? this._renderItem(row, tabbableKey) : this._renderLoading(row)),
+          (row) =>
+            row.kind === 'item'
+              ? row.node.item.key
+              : row.kind === 'loading'
+                ? `loading:${row.level.parent?.item.key ?? ''}`
+                : `${row.kind}:${row.parentKey}`,
+          (row) =>
+            row.kind === 'item'
+              ? this._renderItem(row, tabbableKey)
+              : row.kind === 'loading'
+                ? this._renderLoading(row)
+                : this._renderMessage(row),
         )}
       </div>
       <div hidden>
@@ -560,12 +643,45 @@ export class TfvTree extends LitElement {
         data-parent-key=${row.level.parent?.item.key ?? ''}
         style="--_level: ${row.depth - 1}"
       >
-        ${LOADING}
+        ${this.i18n.loading}
       </div>
     `;
   }
 
-  /** The rows to show: the visible items in tree order, each level followed by its loading row if it has more items. */
+  /**
+   * Hidden from assistive technology, as a tree only holds treeitems: the error is
+   * announced, and the empty text is the tree's description.
+   */
+  private _renderMessage(row: Extract<Row, { kind: 'empty' | 'error' }>) {
+    return html`
+      <div part=${row.kind} aria-hidden="true" data-parent-key=${row.parentKey} style="--_level: ${row.depth - 1}">
+        ${row.kind === 'empty' ? this.i18n.empty : this.i18n.loadError}
+      </div>
+    `;
+  }
+
+  /** Whether the root items have been fetched, and there are none. */
+  private _isEmpty(): boolean {
+    return this._root.size === 0 && !this._root.failed;
+  }
+
+  /** Describes the tree with the empty text while it has no items, unless the app describes it. */
+  private _updateEmptyDescription(): void {
+    const empty = this._isEmpty();
+    if (empty && (this._describedAsEmpty || !this.hasAttribute('aria-description'))) {
+      this.setAttribute('aria-description', this.i18n.empty);
+      this._describedAsEmpty = true;
+    } else if (!empty && this._describedAsEmpty) {
+      this.removeAttribute('aria-description');
+      this._describedAsEmpty = false;
+    }
+  }
+
+  /**
+   * The rows to show: the visible items in tree order, each level followed by its
+   * loading row if it has more items, or its error row if they failed to load; the
+   * empty row if there are no items.
+   */
   private _rows(): Row[] {
     const rows: Row[] = [];
     const addLevel = (level: Level, depth: number) => {
@@ -573,13 +689,20 @@ export class TfvTree extends LitElement {
         rows.push({ kind: 'item', node, position: index + 1, setSize: level.size });
         if (node.expanded && node.children) {
           addLevel(node.children, depth + 1);
+        } else if (this._failedKeys.has(node.item.key)) {
+          rows.push({ kind: 'error', parentKey: node.item.key, depth: depth + 1 });
         }
       });
       if (hasMore(level)) {
         rows.push({ kind: 'loading', level, depth });
+      } else if (level.failed) {
+        rows.push({ kind: 'error', parentKey: level.parent?.item.key ?? '', depth });
       }
     };
     addLevel(this._root, 1);
+    if (this._isEmpty()) {
+      rows.push({ kind: 'empty', parentKey: '', depth: 1 });
+    }
     return rows;
   }
 
@@ -616,8 +739,17 @@ export class TfvTree extends LitElement {
   private async _fetchPage(level: Level, server: TreeServer): Promise<void> {
     const generation = this._generation;
     try {
-      const page = await server.fetchChildren(level.parent?.item.key ?? null, level.nodes.length, this.pageSize);
-      if (generation !== this._generation) {
+      let page: ItemPage;
+      try {
+        page = await server.fetchChildren(level.parent?.item.key ?? null, level.nodes.length, this.pageSize);
+      } catch {
+        // The server has handed the exception to its error handler
+        if (generation === this._generation && this._isShown(level)) {
+          this._onLoadError(level);
+        }
+        return;
+      }
+      if (generation !== this._generation || !this._isShown(level)) {
         return;
       }
       const depth = (level.parent?.depth ?? 0) + 1;
@@ -630,6 +762,71 @@ export class TfvTree extends LitElement {
       level.loading = null;
       this.requestUpdate();
     }
+  }
+
+  /** Tells whether a level is still part of the tree, not dropped by refreshing its parent or an ancestor. */
+  private _isShown(level: Level): boolean {
+    for (let current = level; current.parent; current = current.parent.parent?.children ?? this._root) {
+      const parent: Node = current.parent;
+      if (parent.children !== current || this._nodes.get(parent.item.key) !== parent) {
+        return false;
+      }
+    }
+    return true;
+  }
+
+  /**
+   * Shows that a page of a level failed to load, and announces it. The parent of the
+   * level, if any, collapses back and its child items are dropped, so that expanding it
+   * again fetches them again; its group shows the error for a while.
+   */
+  private _onLoadError(level: Level): void {
+    announce(this.i18n.loadError, { mode: 'alert' });
+    const parent = level.parent;
+    if (!parent) {
+      level.failed = true;
+      return;
+    }
+    const key = parent.item.key;
+    if (parent.expanded) {
+      this._setExpanded(parent, false);
+      this.$server?.setExpanded(false, key);
+    }
+    this._forgetChildren(parent);
+    this._failedKeys.add(key);
+    clearTimeout(this._failedTimeouts.get(key));
+    this._failedTimeouts.set(
+      key,
+      setTimeout(() => {
+        this._failedTimeouts.delete(key);
+        this._failedKeys.delete(key);
+        this.requestUpdate();
+      }, LOAD_ERROR_DURATION),
+    );
+  }
+
+  /** Stops showing errors under items. */
+  private _clearLoadErrors(): void {
+    this._failedTimeouts.forEach((timeout) => clearTimeout(timeout));
+    this._failedTimeouts.clear();
+    this._failedKeys.clear();
+  }
+
+  /** Drops the fetched child items of an item and their descendants, moving focus to the item from any of them. */
+  private _forgetChildren(node: Node): void {
+    if (!node.children) {
+      return;
+    }
+    this._keepFocusVisible(node);
+    const forget = (level: Level) =>
+      level.nodes.forEach((child) => {
+        this._nodes.delete(child.item.key);
+        if (child.children) {
+          forget(child.children);
+        }
+      });
+    forget(node.children);
+    node.children = undefined;
   }
 
   /** Fetches pages of a level until the item with the given key is there, if it ever is. */
@@ -669,6 +866,7 @@ export class TfvTree extends LitElement {
     }
     node.expanded = expanded;
     if (expanded) {
+      this._failedKeys.delete(node.item.key);
       this._fetchChildren(node);
     } else {
       this._keepFocusVisible(node);
