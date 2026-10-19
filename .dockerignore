@@ -1,0 +1,9 @@
+**/target/
+**/node/
+**/node_modules/
+**/src/main/frontend/generated/
+demo/src/main/bundles/
+.git/
+.claude/
+.idea/
+.vscode/
