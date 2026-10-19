@@ -548,13 +548,14 @@ public class Tree<T> extends Component
 
     private <F> ItemPage fetchChildren(HierarchicalDataProvider<T, F> provider, T parent, int offset, int limit) {
         int size = provider.getChildCount(new HierarchicalQuery<>(null, parent));
+        Object selectedId = idOf(selectedItem);
         List<TreeItem> items = provider
                 .fetchChildren(new HierarchicalQuery<>(offset, limit, List.of(), null, null, parent))
                 .map(item -> {
                     Object id = provider.getId(item);
                     return new TreeItem(keyMapper.key(item), itemLabelGenerator.apply(item),
                             itemIconGenerator.apply(item), itemTooltipGenerator.apply(item), provider.hasChildren(item),
-                            isExpanded(item), Objects.equals(id, idOf(selectedItem)), selectionPathIds.contains(id));
+                            isExpanded(item), Objects.equals(id, selectedId), selectionPathIds.contains(id));
                 })
                 .toList();
         return new ItemPage(items, size);

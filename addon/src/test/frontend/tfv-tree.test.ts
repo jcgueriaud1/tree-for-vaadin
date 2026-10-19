@@ -666,7 +666,20 @@ describe('tfv-tree', () => {
       expect(item(tree, 'Music').tabIndex).to.equal(0);
     });
 
-    it('puts the first item in the tab order when the selected item is not visible', async () => {
+    it('puts the deepest visible ancestor of the selected item in the tab order when it is hidden', async () => {
+      const server = serverWith(['Music', ['Documents', ['Invoices', ['Letters', ['2025', '2026']]], true]]);
+      server.selectedKey = '1/1/1';
+      server.selectionPath = ['1', '1/1'];
+      const tree = await treeWith(server);
+      await settle(tree);
+
+      expect(labels(tree)).to.deep.equal(['Music', 'Documents', 'Invoices', 'Letters']);
+      expect(item(tree, 'Letters').tabIndex).to.equal(0);
+      tree.focus();
+      expect(focusedLabel(tree)).to.equal('Letters');
+    });
+
+    it('puts the first item in the tab order when nothing on the selection path is visible', async () => {
       const server = serverWith(FOLDERS);
       server.selectedKey = '0/1';
       const tree = await treeWith(server);

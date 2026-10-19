@@ -85,6 +85,12 @@ function ancestors(node: Node): Node[] {
   return found;
 }
 
+/** Has the tooltip show the given text for the given item. */
+function pointTooltip(tooltip: Tooltip, element: HTMLElement, text: string): void {
+  tooltip.target = element;
+  tooltip.text = text;
+}
+
 /** A row of the tree: a visible item, or the row standing for the items of a level not fetched yet. */
 type Row =
   | { kind: 'item'; node: Node; position: number; setSize: number }
@@ -265,7 +271,10 @@ export class TfvTree extends LitElement {
   /** Fetches the next page of a level when its loading row scrolls into view. */
   private _loadingRowObserver?: IntersectionObserver;
 
-  /** The key of the item hovered or focused whose tooltip is open, opening or closed by the user. */
+  /**
+   * The key of the item the tooltip is for: open, opening, or dismissed by the user, in
+   * which case it stays closed until another item is hovered or focused.
+   */
   private _tooltipKey: string | null = null;
 
   /** What the user has typed so far to move focus by label, lower-cased. */
@@ -297,7 +306,7 @@ export class TfvTree extends LitElement {
     this._loadingRowObserver = undefined;
     clearTimeout(this._typedTimeout);
     this._typed = '';
-    this._hideTooltip();
+    this._closeTooltip();
     super.disconnectedCallback();
   }
 
@@ -337,6 +346,9 @@ export class TfvTree extends LitElement {
    * user collapses an ancestor.
    */
   async scrollToItem(...keys: string[]): Promise<void> {
+    if (keys.length === 0) {
+      return;
+    }
     const generation = this._generation;
     // Before the first update, the root items are not being fetched yet
     await this.updateComplete;
@@ -355,7 +367,9 @@ export class TfvTree extends LitElement {
       }
     }
     await this.updateComplete;
-    this._itemElement(node!.item.key)?.scrollIntoView({ block: 'nearest' });
+    if (node) {
+      this._itemElement(node.item.key)?.scrollIntoView({ block: 'nearest' });
+    }
   }
 
   /** Focuses the item in the tab order. */
@@ -408,7 +422,7 @@ export class TfvTree extends LitElement {
         @click=${this._onClick}
         @mouseover=${this._onMouseOver}
         @mouseleave=${this._onMouseLeave}
-        @mousedown=${this._closeTooltip}
+        @mousedown=${this._dismissTooltip}
       >
         ${repeat(
           rows,
@@ -495,17 +509,24 @@ export class TfvTree extends LitElement {
   }
 
   /** The visible items, in tree order. */
-  private _visibleNodes(rows: Row[] = this._rows()): Node[] {
+  private _visibleItems(rows: Row[] = this._rows()): Node[] {
     return rows.flatMap((row) => (row.kind === 'item' ? [row.node] : []));
   }
 
   /**
    * The key of the item in the tab order: the focused item if visible, else the
-   * selected item if visible, else the first item.
+   * selected item if visible, else its deepest visible ancestor (which shows the
+   * selection path), else the first item.
    */
   private _tabbableKey(rows: Row[] = this._rows()): string | null {
-    const keys = this._visibleNodes(rows).map((node) => node.item.key);
-    return [this._focusedKey, this._selectedKey].find((key) => key !== null && keys.includes(key)) ?? keys[0] ?? null;
+    const keys = this._visibleItems(rows).map((node) => node.item.key);
+    const deepestOnPath = [...keys].reverse().find((key) => this._selectionPath.has(key));
+    return (
+      [this._focusedKey, this._selectedKey].find((key) => key !== null && keys.includes(key)) ??
+      deepestOnPath ??
+      keys[0] ??
+      null
+    );
   }
 
   /** Fetches the next page of a level, or waits for the one being fetched. */
@@ -640,24 +661,25 @@ export class TfvTree extends LitElement {
     const text = key === undefined ? null : this._nodes.get(key)?.item.tooltip;
     const tooltip = this._tooltip();
     if (!text || !tooltip?._stateController || this.disabled) {
-      this._hideTooltip();
+      this._closeTooltip();
       return;
     }
     this._tooltipKey = key!;
-    tooltip.target = element;
-    tooltip.text = text;
+    pointTooltip(tooltip, element, text);
     tooltip._stateController.open({ [trigger]: true });
   }
 
-  /** Closes the tooltip, which stays closed until another item is hovered or focused. */
-  private _closeTooltip(): void {
+  /** Closes the tooltip at the user's request: it stays closed until another item is hovered or focused. */
+  private _dismissTooltip(): void {
     this._tooltip()?._stateController?.close(true);
   }
 
-  private _hideTooltip(immediate = true): void {
+  /** Closes the tooltip and forgets its item, so that hovering or focusing any item opens it again. */
+  private _closeTooltip(immediate = true): void {
     this._tooltipKey = null;
     this._tooltip()?._stateController?.close(immediate);
   }
+
 
   /** Keeps the tooltip on its item as the items are rendered again, and closes it if the item is gone. */
   private _updateTooltip(): void {
@@ -668,10 +690,9 @@ export class TfvTree extends LitElement {
     const text = this._nodes.get(this._tooltipKey)?.item.tooltip;
     const tooltip = this._tooltip();
     if (!element || !text || this.disabled) {
-      this._hideTooltip();
+      this._closeTooltip();
     } else if (tooltip) {
-      tooltip.target = element;
-      tooltip.text = text;
+      pointTooltip(tooltip, element, text);
     }
   }
 
@@ -679,7 +700,7 @@ export class TfvTree extends LitElement {
   private _onMouseOver(event: MouseEvent): void {
     const element = (event.target as HTMLElement).closest<HTMLElement>('[role="treeitem"]');
     if (!element) {
-      this._hideTooltip();
+      this._closeTooltip();
     } else if (element.dataset.key !== this._tooltipKey) {
       this._showTooltip(element, 'hover');
     }
@@ -687,7 +708,13 @@ export class TfvTree extends LitElement {
 
   /** Leaving the items closes the tooltip after its hide delay, as other tooltips do. */
   private _onMouseLeave(): void {
-    this._hideTooltip(false);
+    this._closeTooltip(false);
+  }
+
+  /** The item an event happened on, if it happened on an item. */
+  private _eventNode(event: Event): Node | undefined {
+    const key = (event.target as HTMLElement).closest<HTMLElement>('[role="treeitem"]')?.dataset.key;
+    return key === undefined ? undefined : this._nodes.get(key);
   }
 
   private _itemElement(key: string | null): HTMLElement | null {
@@ -698,13 +725,11 @@ export class TfvTree extends LitElement {
 
   /** Clicking the toggle of an item expands or collapses it; clicking elsewhere on it selects it. */
   private _onClick(event: MouseEvent): void {
-    const target = event.target as HTMLElement;
-    const key = target.closest<HTMLElement>('[role="treeitem"]')?.dataset.key;
-    const node = key === undefined ? undefined : this._nodes.get(key);
+    const node = this._eventNode(event);
     if (!node || this.disabled) {
       return;
     }
-    if (target.closest('[part="toggle"]')) {
+    if ((event.target as HTMLElement).closest('[part="toggle"]')) {
       this._toggle(node);
     } else {
       this._select(node);
@@ -738,26 +763,25 @@ export class TfvTree extends LitElement {
     const next = event.relatedTarget as Element | null;
     if (!next || !(this.renderRoot.contains(next) || this.contains(next))) {
       this._focusedKey = null;
-      this._hideTooltip();
+      this._closeTooltip();
     }
   }
 
   private _onKeyDown(event: KeyboardEvent): void {
-    const key = (event.target as HTMLElement).closest<HTMLElement>('[role="treeitem"]')?.dataset.key;
-    const node = key === undefined ? undefined : this._nodes.get(key);
+    const node = this._eventNode(event);
     if (!node || this.disabled || event.altKey || event.ctrlKey || event.metaKey) {
       return;
     }
     if (event.key === 'Escape') {
       if (this._tooltip()?.opened) {
         // Closing the tooltip is all Escape does, so that it does not also close a dialog
-        this._closeTooltip();
+        this._dismissTooltip();
         event.preventDefault();
         event.stopPropagation();
       }
       return;
     }
-    const visible = this._visibleNodes();
+    const visible = this._visibleItems();
     const index = visible.indexOf(node);
     const rtl = this.matches(':dir(rtl)');
     const forward = rtl ? 'ArrowLeft' : 'ArrowRight';
