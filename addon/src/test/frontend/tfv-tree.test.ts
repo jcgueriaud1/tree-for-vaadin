@@ -986,4 +986,100 @@ describe('tfv-tree', () => {
       expect(tooltip(tree).opened).to.equal(false);
     });
   });
+
+  describe('styling', () => {
+    function stateOf(tree: TfvTree, label: string): string[] {
+      return ['focused', 'focus-ring', 'selected', 'selection-path', 'expanded'].filter((name) =>
+        item(tree, label).hasAttribute(name),
+      );
+    }
+
+    it('marks the focused item, with a focus ring only when focused with the keyboard', async () => {
+      const tree = await treeWith(serverWith(FOLDERS));
+      const outside = document.createElement('button');
+      tree.after(outside);
+
+      await sendKeys({ press: 'Tab' });
+      await tree.updateComplete;
+      expect(stateOf(tree, 'Documents')).to.deep.equal(['focused', 'focus-ring']);
+
+      await sendKeys({ press: 'ArrowDown' });
+      await tree.updateComplete;
+      expect(stateOf(tree, 'Documents')).to.deep.equal([]);
+      expect(stateOf(tree, 'Music')).to.deep.equal(['focused', 'focus-ring']);
+
+      const { x, y, height } = item(tree, 'Pictures').querySelector('[part="label"]')!.getBoundingClientRect();
+      await sendMouse({ type: 'click', position: [Math.round(x + 5), Math.round(y + height / 2)] });
+      await settle(tree);
+      expect(stateOf(tree, 'Pictures')).to.deep.equal(['focused', 'selected']);
+      await resetMouse();
+
+      outside.focus();
+      await tree.updateComplete;
+      expect(stateOf(tree, 'Pictures')).to.deep.equal(['selected']);
+    });
+
+    it('marks the expanded items and the selection path', async () => {
+      const server = serverWith([['Documents', ['Invoices', 'Letters'], true], 'Music']);
+      server.selectedKey = '0/1';
+      server.selectionPath = ['0'];
+      const tree = await treeWith(server);
+      await settle(tree);
+
+      expect(stateOf(tree, 'Documents')).to.deep.equal(['selection-path', 'expanded']);
+      expect(stateOf(tree, 'Letters')).to.deep.equal(['selected']);
+    });
+
+    it('names the states of an item in its part, for styling with ::part() from outside', async () => {
+      const server = serverWith([['Documents', ['Invoices', 'Letters'], true], 'Music']);
+      server.selectedKey = '0/1';
+      server.selectionPath = ['0'];
+      const tree = await treeWith(server);
+      await settle(tree);
+
+      expect(item(tree, 'Documents').getAttribute('part')).to.equal('item expanded selection-path');
+      expect(item(tree, 'Letters').getAttribute('part')).to.equal('item selected');
+      expect(item(tree, 'Music').getAttribute('part')).to.equal('item');
+
+      const style = document.createElement('style');
+      style.textContent = 'tfv-tree::part(item selected) { text-decoration: underline; }';
+      document.head.append(style);
+      try {
+        expect(getComputedStyle(item(tree, 'Letters')).textDecorationLine).to.equal('underline');
+        expect(getComputedStyle(item(tree, 'Music')).textDecorationLine).to.equal('none');
+      } finally {
+        style.remove();
+      }
+    });
+
+    it('lays the parts out from its --tfv-tree-* properties', async () => {
+      const server = serverWith([['Documents', ['Invoices', 'Letters'], true], 'Music']);
+      server.selectedKey = '1';
+      const tree = await treeWith(server, (element) => {
+        element.style.setProperty('--tfv-tree-indent', '30px');
+        element.style.setProperty('--tfv-tree-item-padding-inline', '4px');
+        element.style.setProperty('--tfv-tree-selected-background', 'rgb(1, 2, 3)');
+        element.style.setProperty('--tfv-tree-selected-text-color', 'rgb(250, 251, 252)');
+      });
+      await settle(tree);
+
+      expect(getComputedStyle(item(tree, 'Documents')).paddingInlineStart).to.equal('4px');
+      expect(getComputedStyle(item(tree, 'Letters')).paddingInlineStart).to.equal('34px');
+      expect(getComputedStyle(item(tree, 'Music')).backgroundColor).to.equal('rgb(1, 2, 3)');
+      expect(getComputedStyle(item(tree, 'Music')).color).to.equal('rgb(250, 251, 252)');
+    });
+
+    it('takes the Aura token before the Lumo one, and the Lumo one when there is no Aura', async () => {
+      const server = serverWith(['Documents']);
+      server.selectedKey = '0';
+      const tree = await treeWith(server);
+      const theme = tree.parentElement!;
+
+      theme.style.setProperty('--lumo-primary-text-color', 'rgb(0, 0, 200)');
+      expect(getComputedStyle(item(tree, 'Documents')).backgroundColor).to.equal('rgb(0, 0, 200)');
+
+      theme.style.setProperty('--aura-accent-text-color', 'rgb(200, 0, 0)');
+      expect(getComputedStyle(item(tree, 'Documents')).backgroundColor).to.equal('rgb(200, 0, 0)');
+    });
+  });
 });

@@ -11,7 +11,8 @@ The words in bold below are defined in [GLOSSARY.md](GLOSSARY.md); the design de
 
 The tree shows its **root items**, and items can be **expanded** and **collapsed**, by the user (with the
 toggle in front of an item, or the keyboard) or by the server. The user selects an item by clicking it, or
-with Enter or Space. Items can show an icon and a tooltip. Checkbox selection is still to come.
+with Enter or Space. Items can show an icon and a tooltip. The tree follows the Aura or Lumo theme, light or
+dark, and can be restyled (see [Styling](#styling)). Checkbox selection is still to come.
 
 ## Usage
 
@@ -59,7 +60,7 @@ down, then scrolls the item into view.
 ### Icons and tooltips
 
 `setItemIconGenerator` gives each item the name of an icon, such as `vaadin:folder`, shown
-with `<vaadin-icon>` before its label (part `icon`, sized by `--vaadin-tree-icon-size`); `null` means no icon.
+with `<vaadin-icon>` before its label (part `icon`, sized by `--tfv-tree-icon-size`); `null` means no icon.
 Icons are decorative: they are `aria-hidden`, and the label stays the accessible name of the item. The
 `vaadin:` icons come with the add-on; other icon sets must be loaded by the app.
 
@@ -77,7 +78,7 @@ does not follow focus: moving the **focused item** never changes the selected it
 
 | Key | Does |
 | --- | --- |
-| Tab | Enters the tree, on the selected item if visible, else the first item: the tree is one tab stop |
+| Tab | Enters the tree, on the selected item if visible, else on its deepest visible ancestor (the one showing the selection path), else on the first item: the tree is one tab stop |
 | Down / Up | Moves focus to the next / previous visible item |
 | Home / End | Moves focus to the first / last visible item |
 | Right | Expands a collapsed item; on an expanded item, moves focus to its first child item |
@@ -89,6 +90,76 @@ does not follow focus: moving the **focused item** never changes the selected it
 Left and Right are swapped when the tree is right to left (`dir="rtl"`). Type-ahead only searches the items
 fetched and visible. When an item is collapsed while one of its descendants has focus, focus moves to it. The
 focused item has a focus ring; the selected item a background.
+
+### Styling
+
+The tree looks at home in both [Aura and Lumo](https://vaadin.com/docs/latest/styling/themes), light or dark,
+and in a page with neither. Its styles live in its shadow DOM; style it from outside through its parts, state
+attributes and custom properties.
+
+```css
+tfv-tree {
+  --tfv-tree-indent: 1em;
+  --tfv-tree-selected-background: var(--lumo-primary-color-10pct);
+  --tfv-tree-selected-text-color: var(--lumo-primary-text-color);
+}
+
+tfv-tree::part(item selected) {
+  font-weight: 600;
+}
+```
+
+Set the custom properties on `tfv-tree` itself (or on a class of it), not on an ancestor: the tree gives each
+one its theme value, which only a rule on the element overrides. The example above trades the default solid
+fill of the selected item for Lumo's tint; mind that a tint is under the 3:1 contrast WCAG asks of a state
+indicator.
+
+| Part | Is |
+| --- | --- |
+| `item` | An item (the `treeitem`) |
+| `toggle` | The chevron of an item with child items, which expands and collapses it |
+| `toggle-spacer` | Where the chevron would be, on an item without child items |
+| `icon` | The `<vaadin-icon>` of an item |
+| `label` | The label of an item |
+| `selection-path-marker` | The dot after an ancestor of the selected item |
+| `loading` | The row shown while the items of a level are fetched |
+
+There is no `children` part: the items are siblings in the DOM, each indented by its level (`aria-level`),
+so nothing wraps the child items of an item. Indent them with `--tfv-tree-indent`.
+
+An item's states are part names too, as `::part()` cannot be followed by an attribute selector: style the
+selected item with `tfv-tree::part(item selected)`, an expanded one with `tfv-tree::part(item expanded)`. Inside
+the shadow DOM, the same states are attributes of the item.
+
+| State (part name and attribute of `item`) | Set when |
+| --- | --- |
+| `expanded` | the item is expanded |
+| `selected` | the item is the selected item |
+| `selection-path` | the item is an ancestor of the selected item |
+| `focused` | the item has focus |
+| `focus-ring` | the item has focus from the keyboard, and shows a focus ring |
+
+| Custom property | Default: Aura, else Lumo, else the Vaadin base styles |
+| --- | --- |
+| `--tfv-tree-font-size`, `--tfv-tree-line-height` | `--aura-font-size-m` / `--lumo-font-size-m`, and the matching line heights |
+| `--tfv-tree-text-color` | `--lumo-body-text-color` / `--vaadin-text-color` |
+| `--tfv-tree-secondary-text-color` | `--lumo-secondary-text-color` / `--vaadin-text-color-secondary`: loading row, and the defaults of the two below |
+| `--tfv-tree-icon-color`, `--tfv-tree-toggle-color` | `--tfv-tree-secondary-text-color` |
+| `--tfv-tree-icon-size` | `--lumo-icon-size-s` / `--vaadin-icon-size` |
+| `--tfv-tree-indent` | the indentation per level: `--lumo-space-l` / `--vaadin-padding-l` |
+| `--tfv-tree-item-gap` | between toggle, icon and label: `--lumo-space-xs` / `--vaadin-gap-xs` |
+| `--tfv-tree-item-padding-block`, `--tfv-tree-item-padding-inline` | `--lumo-space-xs` / `--vaadin-padding-xs`, `--lumo-space-s` / `--vaadin-padding-s` |
+| `--tfv-tree-item-border-radius` | `--lumo-border-radius-m` / `--vaadin-radius-m` |
+| `--tfv-tree-item-hover-background` | `--lumo-contrast-5pct` / `--vaadin-background-container` |
+| `--tfv-tree-selected-background` | `--aura-accent-text-color` / `--lumo-primary-text-color` |
+| `--tfv-tree-selected-text-color` | `--aura-background-color` / `--lumo-base-color` |
+| `--tfv-tree-selection-path-color` | `--aura-accent-text-color` / `--lumo-primary-text-color` |
+| `--tfv-tree-focus-ring-color` | `--lumo-primary-text-color` / `--vaadin-focus-ring-color` (Aura sets the latter) |
+| `--tfv-tree-focus-ring-width` | `--vaadin-focus-ring-width`, or 2px |
+
+The defaults meet WCAG contrast in Aura, Lumo light and Lumo dark: text 4.5:1, and the selected fill, focus ring
+and selection path marker 3:1 (checked by `TreeThemesIT`). In forced colors mode (Windows high contrast), the
+selected item takes the system's `Highlight` colors.
 
 ## Development
 

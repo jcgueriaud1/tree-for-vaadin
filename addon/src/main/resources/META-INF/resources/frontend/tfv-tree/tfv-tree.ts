@@ -138,16 +138,48 @@ export class TfvTree extends LitElement {
     readonly: { type: Boolean },
     pageSize: { type: Number },
     _focusedKey: { state: true },
+    _focusRing: { state: true },
     _selectedKey: { state: true },
     _selectionPath: { state: true },
   };
 
+  /*
+   * Every --tfv-tree-* property falls back to Aura's tokens, then Lumo's, then the
+   * --vaadin-* base tokens, then a literal: Lumo comes before the base tokens, which
+   * Vaadin always defines, so that a Lumo app gets Lumo's spacing and colors.
+   */
   static override styles = css`
     :host {
+      --tfv-tree-font-size: var(--aura-font-size-m, var(--lumo-font-size-m, inherit));
+      --tfv-tree-line-height: var(--aura-line-height-m, var(--lumo-line-height-m, inherit));
+      --tfv-tree-text-color: var(--lumo-body-text-color, var(--vaadin-text-color, inherit));
+      --tfv-tree-secondary-text-color: var(--lumo-secondary-text-color, var(--vaadin-text-color-secondary, inherit));
+      --tfv-tree-indent: var(--lumo-space-l, var(--vaadin-padding-l, 1.25em));
+      --tfv-tree-item-gap: var(--lumo-space-xs, var(--vaadin-gap-xs, 0.25em));
+      --tfv-tree-item-padding-block: var(--lumo-space-xs, var(--vaadin-padding-xs, 0.25em));
+      --tfv-tree-item-padding-inline: var(--lumo-space-s, var(--vaadin-padding-s, 0.5em));
+      --tfv-tree-item-border-radius: var(--lumo-border-radius-m, var(--vaadin-radius-m, 0.25em));
+      --tfv-tree-item-hover-background: var(
+        --lumo-contrast-5pct,
+        var(--vaadin-background-container, color-mix(in srgb, currentColor 6%, transparent))
+      );
+      /* A solid fill in the accent text color, which the themes keep in contrast with the background */
+      --tfv-tree-selected-background: var(--aura-accent-text-color, var(--lumo-primary-text-color, Highlight));
+      --tfv-tree-selected-text-color: var(--aura-background-color, var(--lumo-base-color, HighlightText));
+      --tfv-tree-selection-path-color: var(--aura-accent-text-color, var(--lumo-primary-text-color, currentColor));
+      /* Lumo's primary text color, as its primary color is too faint for a ring in the dark variant */
+      --tfv-tree-focus-ring-color: var(--lumo-primary-text-color, var(--vaadin-focus-ring-color, Highlight));
+      --tfv-tree-focus-ring-width: var(--vaadin-focus-ring-width, 2px);
+      --tfv-tree-icon-size: var(--lumo-icon-size-s, var(--vaadin-icon-size, 1.125em));
+      --tfv-tree-icon-color: var(--tfv-tree-secondary-text-color);
+      --tfv-tree-toggle-color: var(--tfv-tree-secondary-text-color);
+
       display: block;
       overflow: auto;
       outline: none;
-      --_indent: 1.25em;
+      font-size: var(--tfv-tree-font-size);
+      line-height: var(--tfv-tree-line-height);
+      color: var(--tfv-tree-text-color);
     }
 
     :host([hidden]) {
@@ -159,23 +191,39 @@ export class TfvTree extends LitElement {
       pointer-events: none;
     }
 
-    [part='item'] {
+    [part~='item'] {
       display: flex;
       align-items: center;
-      gap: 0.25em;
-      padding-block: 0.25em;
-      padding-inline: calc(var(--_level) * var(--_indent) + 0.25em) 0.5em;
-      border-radius: 0.25em;
+      gap: var(--tfv-tree-item-gap);
+      padding-block: var(--tfv-tree-item-padding-block);
+      padding-inline: calc(var(--_level) * var(--tfv-tree-indent) + var(--tfv-tree-item-padding-inline))
+        var(--tfv-tree-item-padding-inline);
+      border-radius: var(--tfv-tree-item-border-radius);
       cursor: default;
     }
 
-    [part='item'][selected] {
-      background: var(--vaadin-tree-selected-background, color-mix(in srgb, currentColor 12%, transparent));
+    @media (any-hover: hover) {
+      [part~='item']:not([selected]):hover {
+        background: var(--tfv-tree-item-hover-background);
+      }
     }
 
-    [part='item']:focus-visible {
-      outline: 2px solid var(--vaadin-focus-ring-color, var(--lumo-primary-color-50pct, Highlight));
-      outline-offset: -2px;
+    [part~='item'][selected] {
+      background: var(--tfv-tree-selected-background);
+      color: var(--tfv-tree-selected-text-color);
+      --tfv-tree-icon-color: currentColor;
+      --tfv-tree-toggle-color: currentColor;
+    }
+
+    [part~='item']:focus-visible {
+      outline: var(--tfv-tree-focus-ring-width) solid var(--tfv-tree-focus-ring-color);
+      outline-offset: calc(var(--tfv-tree-focus-ring-width) * -1);
+    }
+
+    /* On the selected fill, the ring takes the text color, inset from the edge so the fill frames it */
+    [part~='item'][selected]:focus-visible {
+      outline-color: var(--tfv-tree-selected-text-color);
+      outline-offset: calc(var(--tfv-tree-focus-ring-width) * -2);
     }
 
     [part='toggle'],
@@ -186,6 +234,7 @@ export class TfvTree extends LitElement {
       justify-content: center;
       width: 1em;
       height: 1em;
+      color: var(--tfv-tree-toggle-color);
     }
 
     [part='toggle'] {
@@ -206,14 +255,22 @@ export class TfvTree extends LitElement {
       transform: rotate(45deg);
     }
 
-    [part='item'][expanded] > [part='toggle']::before {
+    [part~='item'][expanded] > [part='toggle']::before {
       transform: rotate(45deg);
     }
 
     [part='icon'] {
       flex: none;
-      width: var(--vaadin-tree-icon-size, 1.125em);
-      height: var(--vaadin-tree-icon-size, 1.125em);
+      width: var(--tfv-tree-icon-size);
+      height: var(--tfv-tree-icon-size);
+      color: var(--tfv-tree-icon-color);
+    }
+
+    [part='label'] {
+      min-width: 0;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
     }
 
     /* A dot after the label of each ancestor of the selected item */
@@ -222,32 +279,33 @@ export class TfvTree extends LitElement {
       width: 0.4em;
       height: 0.4em;
       border-radius: 50%;
-      background: currentColor;
+      background: var(--tfv-tree-selection-path-color);
+    }
+
+    [part='loading'] {
+      padding-block: var(--tfv-tree-item-padding-block);
+      padding-inline-start: calc(
+        var(--_level) * var(--tfv-tree-indent) + var(--tfv-tree-item-padding-inline) + 1em + var(--tfv-tree-item-gap)
+      );
+      font-size: 0.875em;
+      color: var(--tfv-tree-secondary-text-color);
     }
 
     @media (forced-colors: active) {
-      [part='item'][selected] {
+      [part~='item'][selected] {
         forced-color-adjust: none;
         background: Highlight;
         color: HighlightText;
       }
 
       /* The focus ring, otherwise lost on the selected item's Highlight */
-      [part='item'][selected]:focus-visible {
+      [part~='item'][selected]:focus-visible {
         outline-color: HighlightText;
-        outline-offset: -4px;
       }
 
       [part='selection-path-marker'] {
         background: CanvasText;
       }
-    }
-
-    [part='loading'] {
-      padding-block: 0.25em;
-      padding-inline-start: calc(var(--_level) * var(--_indent) + 1.5em);
-      font-size: 0.875em;
-      opacity: 0.7;
     }
   `;
 
@@ -256,7 +314,10 @@ export class TfvTree extends LitElement {
   declare readonly: boolean;
   declare pageSize: number;
   declare $server?: TreeServer;
+  /** The key of the item that has focus, or null while focus is outside the tree. */
   declare _focusedKey: string | null;
+  /** Whether the focused item shows a focus ring, as it does when focused with the keyboard. */
+  declare _focusRing: boolean;
   /** The key of the selected item, which may not be fetched yet. */
   declare _selectedKey: string | null;
   /** The keys of the ancestors of the selected item. */
@@ -287,6 +348,7 @@ export class TfvTree extends LitElement {
     this.readonly = false;
     this.pageSize = PAGE_SIZE;
     this._focusedKey = null;
+    this._focusRing = false;
     this._selectedKey = null;
     this._selectionPath = new Set();
   }
@@ -448,9 +510,20 @@ export class TfvTree extends LitElement {
     const { item } = node;
     const selected = item.key === this._selectedKey;
     const onSelectionPath = this._selectionPath.has(item.key);
+    const expanded = item.expandable && node.expanded;
+    const focused = item.key === this._focusedKey;
+    // The states are part names too, as ::part() cannot be followed by an attribute selector
+    const states = {
+      expanded,
+      selected,
+      'selection-path': onSelectionPath,
+      focused,
+      'focus-ring': focused && this._focusRing,
+    };
+    const part = ['item', ...Object.entries(states).flatMap(([state, on]) => (on ? [state] : []))].join(' ');
     return html`
       <div
-        part="item"
+        part=${part}
         role="treeitem"
         aria-level=${node.depth}
         aria-posinset=${row.position}
@@ -459,9 +532,11 @@ export class TfvTree extends LitElement {
         aria-busy=${node.expanded && node.children?.loading ? 'true' : nothing}
         aria-selected=${String(selected)}
         aria-describedby=${item.tooltip ? this._descriptionId(item.key) : nothing}
-        ?expanded=${item.expandable && node.expanded}
+        ?expanded=${expanded}
         ?selected=${selected}
         ?selection-path=${onSelectionPath}
+        ?focused=${focused}
+        ?focus-ring=${states['focus-ring']}
         tabindex=${!this.disabled && item.key === tabbableKey ? 0 : -1}
         data-key=${item.key}
         style="--_level: ${node.depth - 1}"
@@ -752,7 +827,8 @@ export class TfvTree extends LitElement {
     const key = target.dataset.key;
     if (key !== undefined) {
       this._focusedKey = key;
-      if (target.matches(':focus-visible')) {
+      this._focusRing = target.matches(':focus-visible');
+      if (this._focusRing) {
         this._showTooltip(target, 'focus');
       }
     }
@@ -763,6 +839,7 @@ export class TfvTree extends LitElement {
     const next = event.relatedTarget as Element | null;
     if (!next || !(this.renderRoot.contains(next) || this.contains(next))) {
       this._focusedKey = null;
+      this._focusRing = false;
       this._closeTooltip();
     }
   }

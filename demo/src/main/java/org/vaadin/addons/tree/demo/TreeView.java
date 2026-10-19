@@ -27,7 +27,7 @@ public class TreeView extends Main {
     }
 
     public TreeView() {
-        add(new H1("Tree for Vaadin"), folders(), catalogue());
+        add(new H1("Tree for Vaadin"), new ThemeSwitcher(), folders(), catalogue());
     }
 
     private static Section folders() {
