@@ -3,6 +3,7 @@ package org.vaadin.addons.tree.demo;
 import static com.microsoft.playwright.assertions.PlaywrightAssertions.assertThat;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotEquals;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.util.List;
 
@@ -15,11 +16,13 @@ import org.junit.jupiter.api.Test;
 import com.deque.html.axecore.playwright.AxeBuilder;
 import com.deque.html.axecore.results.AxeResults;
 import com.microsoft.playwright.Browser;
+import com.microsoft.playwright.BrowserContext;
 import com.microsoft.playwright.Locator;
 import com.microsoft.playwright.Page;
 import com.microsoft.playwright.Playwright;
 import com.microsoft.playwright.assertions.LocatorAssertions;
 import com.microsoft.playwright.options.AriaRole;
+import com.microsoft.playwright.options.BoundingBox;
 
 /** The demo in a real browser, as assistive technology sees it. Started by the build on demo.url. */
 class TreeViewIT {
@@ -524,6 +527,82 @@ class TreeViewIT {
     }
 
     @Test
+    void theTextsTheTreeShowsByItselfCanBeTranslated() {
+        page.getByRole(AriaRole.BUTTON, new Page.GetByRoleOptions().setName("Remove all projects")).click();
+        assertThat(projects().getByText("No items")).isVisible();
+
+        checkbox("French texts").click();
+
+        assertThat(projects().getByText("Aucun élément")).isVisible();
+        assertThat(projects()).hasAccessibleDescription("Aucun élément");
+    }
+
+    @Test
+    void theSelectionIsAFieldBoundWithABinderThatCanBeReadOnly() {
+        item(shortcutFolder(), "Music").click();
+
+        assertThat(item(shortcutFolder(), "Music")).hasAttribute("aria-selected", "true");
+        assertThat(shortcutStatus()).hasText("The shortcut opens Music");
+
+        checkbox("Read-only").click();
+        item(shortcutFolder(), "Pictures").click();
+
+        assertThat(item(shortcutFolder(), "Music")).hasAttribute("aria-selected", "true");
+        assertThat(item(shortcutFolder(), "Pictures")).hasAttribute("aria-selected", "false");
+        assertThat(shortcutStatus()).hasText("The shortcut opens Music");
+    }
+
+    @Test
+    void aDisabledTreeShowsItsItemsButIsOutOfTheTabOrder() {
+        checkbox("Disabled").click();
+
+        assertThat(shortcutFolder()).hasAttribute("aria-disabled", "true");
+        assertThat(shortcutFolder().getByRole(AriaRole.TREEITEM)).hasText(new String[] { "Documents", "Music",
+                "Pictures" });
+        assertEquals(List.of("-1", "-1", "-1"), shortcutFolder().getByRole(AriaRole.TREEITEM).all().stream()
+                .map(item -> item.getAttribute("tabindex")).toList());
+    }
+
+    @Test
+    void onAPhoneTappingBesideTheChevronExpandsTheItemWithoutSelectingIt() {
+        try (BrowserContext phone = phone()) {
+            Page page = phone.newPage();
+            page.navigate(URL);
+            Locator folders = page.getByRole(AriaRole.TREE, new Page.GetByRoleOptions().setName("Folders"));
+            Locator documents = item(folders, "Documents");
+            BoundingBox toggle = documents.locator("[part=toggle]").boundingBox();
+            assertTrue(toggle.width >= 44 && toggle.height >= 44,
+                    "the toggle is " + toggle.width + " by " + toggle.height + ", smaller than a fingertip");
+
+            // Where a thumb lands when aiming at the chevron, off its centre
+            page.touchscreen().tap(toggle.x + 4, toggle.y + toggle.height - 4);
+
+            assertThat(documents).hasAttribute("aria-expanded", "true");
+            assertThat(documents).hasAttribute("aria-selected", "false");
+
+            page.touchscreen().tap(toggle.x + toggle.width + 40, toggle.y + toggle.height / 2);
+
+            assertThat(documents).hasAttribute("aria-selected", "true");
+            assertThat(documents).hasAttribute("aria-expanded", "true");
+        }
+    }
+
+    @Test
+    void onAPhoneThePageFitsTheScreenAndHasNoAccessibilityViolations() {
+        try (BrowserContext phone = phone()) {
+            Page page = phone.newPage();
+            page.navigate(URL);
+            assertThat(item(page.getByRole(AriaRole.TREE, new Page.GetByRoleOptions().setName("Folders")),
+                    "Documents")).isVisible();
+
+            assertEquals(Boolean.TRUE, page.evaluate(
+                    "document.documentElement.scrollWidth <= document.documentElement.clientWidth"),
+                    "the page scrolls sideways");
+            assertNoAccessibilityViolations(page);
+        }
+    }
+
+    @Test
     void thePageHasNoAccessibilityViolations() {
         page.getByRole(AriaRole.BUTTON, new Page.GetByRoleOptions().setName("Expand all")).click();
         assertThat(item(folders(), "Holidays")).isVisible();
@@ -534,6 +613,13 @@ class TreeViewIT {
         page.getByRole(AriaRole.BUTTON, new Page.GetByRoleOptions().setName("Remove all projects")).click();
         assertThat(projects().getByText("No items")).isVisible();
 
+        checkbox("Disabled").click();
+        assertThat(shortcutFolder()).hasAttribute("aria-disabled", "true");
+
+        assertNoAccessibilityViolations(page);
+    }
+
+    static void assertNoAccessibilityViolations(Page page) {
         // Vaadin's connection indicator sits outside any landmark; it is not ours to fix
         AxeResults results = new AxeBuilder(page).exclude(List.of("vaadin-connection-indicator")).analyze();
 
@@ -541,6 +627,12 @@ class TreeViewIT {
                 .map(violation -> violation.getId() + ": " + violation.getHelp() + " "
                         + violation.getNodes().stream().map(node -> node.getTarget().toString()).toList())
                 .toList());
+    }
+
+    /** A phone's screen, touch and coarse pointer. */
+    private static BrowserContext phone() {
+        return browser.newContext(new Browser.NewContextOptions().setViewportSize(412, 915).setDeviceScaleFactor(2.625)
+                .setIsMobile(true).setHasTouch(true));
     }
 
     private void assertOnSelectionPath(String label) {
@@ -575,6 +667,19 @@ class TreeViewIT {
 
     private Locator projectsStatus() {
         return page.locator("section").filter(new Locator.FilterOptions().setHas(projects())).getByRole(AriaRole.STATUS);
+    }
+
+    private Locator checkbox(String label) {
+        return page.getByRole(AriaRole.CHECKBOX, new Page.GetByRoleOptions().setName(label));
+    }
+
+    private Locator shortcutFolder() {
+        return page.getByRole(AriaRole.TREE, new Page.GetByRoleOptions().setName("Shortcut folder"));
+    }
+
+    private Locator shortcutStatus() {
+        return page.locator("section").filter(new Locator.FilterOptions().setHas(shortcutFolder()))
+                .getByRole(AriaRole.STATUS);
     }
 
     private Locator folders() {

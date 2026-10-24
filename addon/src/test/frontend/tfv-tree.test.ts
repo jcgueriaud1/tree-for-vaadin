@@ -272,6 +272,25 @@ describe('tfv-tree', () => {
       expect(item(tree, 'Music').querySelector('[part="toggle"]')).to.not.exist;
     });
 
+    it('takes clicks on the toggle within a 24px square around the chevron (WCAG 2.5.8)', async () => {
+      const server = serverWith(FOLDERS);
+      const tree = await treeWith(server);
+      const toggle = item(tree, 'Documents').querySelector<HTMLElement>('[part="toggle"]')!;
+      const { x, y, width, height } = toggle.getBoundingClientRect();
+      const [centerX, centerY] = [x + width / 2, y + height / 2];
+
+      for (const [dx, dy] of [[-11, -11], [11, -11], [-11, 11], [11, 11]]) {
+        const hit = tree.shadowRoot!.elementFromPoint(centerX + dx, centerY + dy);
+        expect(hit === toggle, `the toggle is hit at ${dx}, ${dy}, not ${hit?.getAttribute('part')}`).to.be.true;
+      }
+
+      await sendMouse({ type: 'click', position: [Math.round(centerX - 11), Math.round(centerY + 11)] });
+      await settle(tree);
+      await resetMouse();
+      expect(server.expansions).to.deep.equal([['0', true]]);
+      expect(server.selections).to.deep.equal([]);
+    });
+
     it('fetches the child items when an item is first expanded, and shows them under it', async () => {
       const server = serverWith(FOLDERS);
       const tree = await treeWith(server);
