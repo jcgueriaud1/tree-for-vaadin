@@ -10,33 +10,103 @@ quiet spell can take about a minute while it wakes up.
 
 The words in bold below are defined in [GLOSSARY.md](GLOSSARY.md); the design decisions are in [docs/adr](docs/adr).
 
-## Status
+## Features
 
-The tree shows its **root items**, and items can be **expanded** and **collapsed**, by the user (with the
-toggle in front of an item, or the keyboard) or by the server. The user selects an item by clicking it, or
-with Enter or Space. Items can show an icon and a tooltip. The tree keeps its state when the data is
-refreshed, shows when it has no items or when items fail to load, and its texts can be translated. The tree follows the Aura or Lumo theme, light or
-dark, and can be restyled (see [Styling](#styling)). Checkbox selection is still to come.
+- An ARIA `tree`, labelled, that screen readers and keyboards can use: the keys of the
+  [ARIA tree pattern](https://www.w3.org/WAI/ARIA/apg/patterns/treeview/), type-ahead included.
+- **Items** fetched lazily from any `HierarchicalDataProvider`, a page at a time, as the user expands items and scrolls.
+- **Expanding** and **collapsing** by the user or by the server, with events telling which.
+- One **selected item**, bound like any field with `asSingleSelect()`, with its ancestors marked.
+- Icons and tooltips on items.
+- Data refreshes that keep the state of the tree, and messages for an empty tree and for items that fail to load,
+  in your language.
+- Read-only and disabled states.
+- Touch screens: items and their toggle are fingertip-sized there.
+- The Aura and Lumo themes, light or dark, and styling through parts and CSS custom properties.
 
-## Usage
+Checkbox selection and the other ideas for later are in the [issues](https://github.com/jcgueriaud1/tree-for-vaadin/issues).
+
+## Installation
+
+Add the dependency to your Vaadin application:
+
+```xml
+<dependency>
+    <groupId>org.vaadin.addons</groupId>
+    <artifactId>tree-for-vaadin</artifactId>
+    <version>1.0.0</version>
+</dependency>
+```
+
+The add-on is not published yet. Until it is, build it with `./mvnw install` and depend on `1.0.0-SNAPSHOT`.
+
+## Quick start
 
 ```java
 TreeData<Folder> data = new TreeData<>();
 data.addRootItems(documents, music, pictures);
+data.addItems(documents, invoices, letters);
 
 Tree<Folder> tree = new Tree<>();
-tree.setItems(data);                    // or setDataProvider(anyHierarchicalDataProvider)
+tree.setItems(data);
 tree.setItemLabelGenerator(Folder::name);
+tree.setAriaLabel("Folders");           // the accessible name of the tree: always give it one
+tree.asSingleSelect().addValueChangeListener(event -> open(event.getValue()));
+add(tree);
+```
+
+A tree needs an accessible name: `setAriaLabel`, or `setAriaLabelledBy` the id of a visible label.
+
+## Items from a backend
+
+`setDataProvider` takes any `HierarchicalDataProvider`. The tree asks it for the child items of an item when the
+user first expands it, and for the next page of a level when the user scrolls near its end, so a level can hold
+thousands of items:
+
+```java
+public class CatalogDataProvider extends AbstractBackEndHierarchicalDataProvider<Entry, Void> {
+
+    @Override
+    public int getChildCount(HierarchicalQuery<Entry, Void> query) {
+        return query.getParent() == null ? categories.count() : products.countIn((Category) query.getParent());
+    }
+
+    @Override
+    public boolean hasChildren(Entry entry) {
+        return entry instanceof Category category && products.countIn(category) > 0;
+    }
+
+    @Override
+    public Entry getParent(Entry entry) {        // for the selection path and scrollToItem
+        return entry instanceof Product product ? product.category() : null;
+    }
+
+    @Override
+    protected Stream<Entry> fetchChildrenFromBackEnd(HierarchicalQuery<Entry, Void> query) {
+        return query.getParent() == null
+                ? categories.fetch(query.getOffset(), query.getLimit())
+                : products.fetchIn((Category) query.getParent(), query.getOffset(), query.getLimit());
+    }
+}
+
+tree.setDataProvider(new CatalogDataProvider());
+tree.setPageSize(100);                   // how many items each fetch asks for; 50 by default
+```
+
+The demo's [`CatalogDataProvider`](demo/src/main/java/org/vaadin/addons/tree/demo/CatalogDataProvider.java) is a
+complete one.
+
+## Usage
+
+```java
 tree.setItemIconGenerator(folder -> "vaadin:folder");  // an icon name, or null for none
 tree.setItemTooltipGenerator(Folder::description);     // the tooltip text, or null for none
-tree.setAriaLabel("Folders");           // the accessible name of the tree
 
 tree.expand(documents);                 // or collapse(...), isExpanded(...)
 tree.addExpandListener(event -> log("Expanded " + event.getItems() + (event.isFromClient() ? " by the user" : "")));
 tree.addCollapseListener(event -> log("Collapsed " + event.getItems()));
 
 tree.asSingleSelect().setValue(letters); // the selected item, or null for none
-tree.asSingleSelect().addValueChangeListener(event -> open(event.getValue()));
 tree.scrollToItem(letters);             // expands its ancestors and scrolls it into view
 
 data.addItem(documents, receipts);
@@ -53,9 +123,17 @@ level is being fetched, its parent (or the tree, for the root items) is `aria-bu
 
 Expanding an item does not expand its ancestors: its child items show once they are all expanded too.
 
+### Selection
+
 There is one **selected item** at most (`setSelectionMode(SelectionMode.SINGLE)`, the only mode for now), and
 every item can be selected, parents too. The `Tree` is not itself a `HasValue`: `asSingleSelect()` is, so it can
-be bound with a `Binder`. Clicking an item selects it (clicking its toggle only expands or collapses it);
+be bound with a `Binder`:
+
+```java
+binder.forField(tree.asSingleSelect()).bind(Shortcut::getFolder, Shortcut::setFolder);
+```
+
+Clicking an item selects it (clicking its toggle only expands or collapses it);
 clicking the selected item again keeps it selected, and only the server clears the selection, with
 `setValue(null)`. Items are `aria-selected`. Expanding and collapsing never change the selection, and setting
 the value never expands anything. The ancestors of the selected item, its **selection path**, have the
@@ -64,7 +142,11 @@ data provider to implement `getParent`, as `TreeDataProvider` does, and is left 
 `scrollToItem(item)` needs `getParent` too: it expands the item's ancestors and fetches the pages on the way
 down, then scrolls the item into view.
 
-### Data changes, errors and texts
+`asSingleSelect().setReadOnly(true)` (or `binder.setReadOnly(true)`) keeps the user from changing the selection;
+they can still expand, collapse and move through the items. `setEnabled(false)` disables the whole tree: it
+still shows its items, dimmed, but takes no input and is out of the tab order (`aria-disabled`).
+
+### Data changes, errors and texts (i18n)
 
 `refreshAll()` on the data provider has the browser fetch the items again. Items that still exist, by their id
 (`getId`), stay expanded, and the value stays as it is even if its item is gone: clear it if need be.
@@ -81,7 +163,16 @@ A tree without items shows "No items" (part `empty`), which is also its accessib
 (`aria-description`), unless the app gives the tree a description of its own.
 
 The texts the tree shows by itself, "Loading…", "No items" and the load error, are English by default and
-set with `setI18n(new TreeI18n()...)`. Set the object again after changing it.
+set with `setI18n`. Set the object again after changing it:
+
+```java
+tree.setI18n(new TreeI18n()
+        .setLoading("Chargement…")
+        .setEmpty("Aucun élément")
+        .setLoadError("Impossible de charger les éléments"));
+```
+
+Item labels and tooltips come from your generators, so translate them there.
 
 ### Icons and tooltips
 
@@ -116,6 +207,13 @@ does not follow focus: moving the **focused item** never changes the selected it
 Left and Right are swapped when the tree is right to left (`dir="rtl"`). Type-ahead only searches the items
 fetched and visible. When an item is collapsed while one of its descendants has focus, focus moves to it. The
 focused item has a focus ring; the selected item a background.
+
+### Touch screens
+
+A tap on an item selects it, and a tap on its toggle expands or collapses it. With a mouse, the toggle takes
+clicks in a 24px square around its chevron at least (WCAG 2.5.8). On a touch screen (`pointer: coarse`), items
+are at least 44px tall, and the toggle is a 44px column as tall as its item, so a thumb that lands beside the
+chevron still opens the item.
 
 ### Styling
 
@@ -189,6 +287,18 @@ the shadow DOM, the same states are attributes of the item.
 The defaults meet WCAG contrast in Aura, Lumo light and Lumo dark: text 4.5:1, and the selected fill, focus ring
 and selection path marker 3:1 (checked by `TreeThemesIT`). In forced colors mode (Windows high contrast), the
 selected item takes the system's `Highlight` colors.
+
+## Repository layout
+
+| Path | Holds |
+| --- | --- |
+| `addon/` | The add-on, `org.vaadin.addons:tree-for-vaadin`, depending on Vaadin only |
+| `addon/src/main/java/org/vaadin/addons/tree/` | `Tree` and its events and texts |
+| `addon/src/main/resources/META-INF/resources/frontend/tfv-tree/` | The `<tfv-tree>` Lit element |
+| `addon/src/test/` | Browserless tests of `Tree`, and Lit tests of `<tfv-tree>` |
+| `demo/` | The Spring Boot demo, and the Playwright and axe-core tests run against it |
+| `docs/adr/` | The design decisions |
+| `GLOSSARY.md` | The words the README and the code use for the parts of a tree |
 
 ## Development
 

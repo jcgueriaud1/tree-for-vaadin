@@ -207,6 +207,8 @@ export class TfvTree extends LitElement {
       --tfv-tree-icon-color: var(--tfv-tree-secondary-text-color);
       --tfv-tree-toggle-color: var(--tfv-tree-secondary-text-color);
       --tfv-tree-error-text-color: var(--aura-red-text, var(--lumo-error-text-color, var(--tfv-tree-text-color)));
+      /* The width of the toggle, and of the spacer standing for it */
+      --_toggle-width: 1em;
 
       display: block;
       overflow: auto;
@@ -266,13 +268,44 @@ export class TfvTree extends LitElement {
       display: inline-flex;
       align-items: center;
       justify-content: center;
-      width: 1em;
+      width: var(--_toggle-width);
       height: 1em;
       color: var(--tfv-tree-toggle-color);
     }
 
     [part='toggle'] {
+      position: relative;
       cursor: pointer;
+    }
+
+    /* What takes clicks: at least 24px square around the chevron (WCAG 2.5.8), however small the font */
+    [part='toggle']::after {
+      content: '';
+      position: absolute;
+      top: 50%;
+      left: 50%;
+      width: max(100%, 24px);
+      height: max(100%, 24px);
+      translate: -50% -50%;
+    }
+
+    /* On a touch screen, items and their toggle are at least 44px, the size of a fingertip */
+    @media (pointer: coarse) {
+      :host {
+        --_toggle-width: max(2.5em, 44px);
+      }
+
+      [part~='item'] {
+        min-height: 44px;
+        box-sizing: border-box;
+      }
+
+      /* As tall as its item */
+      [part='toggle'] {
+        align-self: stretch;
+        height: auto;
+        margin-block: calc(var(--tfv-tree-item-padding-block) * -1);
+      }
     }
 
     /* A chevron pointing to the inline end, or down once expanded */
@@ -321,7 +354,7 @@ export class TfvTree extends LitElement {
     [part='error'] {
       padding-block: var(--tfv-tree-item-padding-block);
       padding-inline-start: calc(
-        var(--_level) * var(--tfv-tree-indent) + var(--tfv-tree-item-padding-inline) + 1em + var(--tfv-tree-item-gap)
+        var(--_level) * var(--tfv-tree-indent) + var(--tfv-tree-item-padding-inline) + var(--_toggle-width) + var(--tfv-tree-item-gap)
       );
       font-size: 0.875em;
       color: var(--tfv-tree-secondary-text-color);

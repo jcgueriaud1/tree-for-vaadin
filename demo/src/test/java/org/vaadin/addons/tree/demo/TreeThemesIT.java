@@ -23,8 +23,8 @@ import com.microsoft.playwright.options.AriaRole;
 
 /**
  * The tree in each theme of the demo: its selected item, focus ring and selection
- * path must stand out enough (WCAG 1.4.3 and 1.4.11). Screenshots of each theme
- * go to target/screenshots.
+ * path must stand out enough (WCAG 1.4.3 and 1.4.11), and axe-core must find no
+ * violations. Screenshots of each theme go to target/screenshots.
  */
 class TreeThemesIT {
 
@@ -138,6 +138,8 @@ class TreeThemesIT {
 
         page.locator("section").first().screenshot(new Locator.ScreenshotOptions()
                 .setPath(Path.of("target", "screenshots", "tree-" + theme.toLowerCase() + ".png")));
+
+        TreeViewIT.assertNoAccessibilityViolations(page);
     }
 
     @Test
