@@ -137,7 +137,9 @@ Clicking an item selects it (clicking its toggle only expands or collapses it);
 clicking the selected item again keeps it selected, and only the server clears the selection, with
 `setValue(null)`. Items are `aria-selected`. Expanding and collapsing never change the selection, and setting
 the value never expands anything. The ancestors of the selected item, its **selection path**, have the
-`selection-path` attribute and a dot marker (part `selection-path-marker`), collapsed or not; this needs the
+`selection-path` attribute and a dot marker (part `selection-path-marker`), collapsed or not. As the marker is
+for the eyes, each of them is also described to assistive technology as "Contains the selected item" (before its
+tooltip text, if any), so a screen reader on a collapsed folder tells that the selection is inside. This needs the
 data provider to implement `getParent`, as `TreeDataProvider` does, and is left out otherwise.
 `scrollToItem(item)` needs `getParent` too: it expands the item's ancestors and fetches the pages on the way
 down, then scrolls the item into view.
@@ -162,14 +164,16 @@ The error is announced to screen readers through Vaadin's live region, as an ale
 A tree without items shows "No items" (part `empty`), which is also its accessible description
 (`aria-description`), unless the app gives the tree a description of its own.
 
-The texts the tree shows by itself, "Loading…", "No items" and the load error, are English by default and
-set with `setI18n`. Set the object again after changing it:
+The texts the tree shows by itself, "Loading…", "No items" and the load error, and the description of the
+selection path, "Contains the selected item", are English by default and set with `setI18n`. Set the object
+again after changing it:
 
 ```java
 tree.setI18n(new TreeI18n()
         .setLoading("Chargement…")
         .setEmpty("Aucun élément")
-        .setLoadError("Impossible de charger les éléments"));
+        .setLoadError("Impossible de charger les éléments")
+        .setSelectionPath("Contient l’élément sélectionné"));
 ```
 
 Item labels and tooltips come from your generators, so translate them there.

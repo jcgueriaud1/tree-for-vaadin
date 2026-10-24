@@ -60,13 +60,19 @@ export interface TreeI18n {
   empty: string;
   /** Shown, and announced, when fetching items fails. */
   loadError: string;
+  /** The accessible description of each ancestor of the selected item. */
+  selectionPath: string;
 }
 
 export const DEFAULT_I18N: TreeI18n = {
   loading: 'Loading…',
   empty: 'No items',
   loadError: 'Could not load the items',
+  selectionPath: 'Contains the selected item',
 };
+
+/** The id of the hidden text that describes each ancestor of the selected item. */
+const SELECTION_PATH_DESCRIPTION_ID = 'selection-path-description';
 
 /** How long the group of an item whose child items failed to load shows the error, in milliseconds. */
 export const LOAD_ERROR_DURATION = 3000;
@@ -148,7 +154,8 @@ function hasMore(level: Level): boolean {
  *
  * Clicking an item selects it, and tells `$server.select`; the server sets the
  * selection with `setSelection`. The ancestors of the selected item have the
- * `selection-path` attribute and a `selection-path-marker` part.
+ * `selection-path` attribute and a `selection-path-marker` part, and are described
+ * as containing it, for assistive technology.
  *
  * An item can have an icon, a decorative `<vaadin-icon>` hidden from assistive
  * technology, and a tooltip: one `<vaadin-tooltip>` follows the item hovered or
@@ -609,6 +616,7 @@ export class TfvTree extends LitElement {
         )}
       </div>
       <div hidden>
+        <span id=${SELECTION_PATH_DESCRIPTION_ID}>${this.i18n.selectionPath}</span>
         ${rows.map((row) =>
           row.kind === 'item' && row.node.item.tooltip
             ? html`<span id=${this._descriptionId(row.node.item.key)}>${row.node.item.tooltip}</span>`
@@ -637,6 +645,11 @@ export class TfvTree extends LitElement {
       'focus-ring': focused && this._focusRing,
     };
     const part = ['item', ...Object.entries(states).flatMap(([state, on]) => (on ? [state] : []))].join(' ');
+    // The marker is for the eyes: the description tells assistive technology
+    const describedBy = [
+      onSelectionPath ? SELECTION_PATH_DESCRIPTION_ID : null,
+      item.tooltip ? this._descriptionId(item.key) : null,
+    ].filter((id) => id !== null);
     return html`
       <div
         part=${part}
@@ -647,7 +660,7 @@ export class TfvTree extends LitElement {
         aria-expanded=${item.expandable ? String(node.expanded) : nothing}
         aria-busy=${node.expanded && node.children?.loading ? 'true' : nothing}
         aria-selected=${String(selected)}
-        aria-describedby=${item.tooltip ? this._descriptionId(item.key) : nothing}
+        aria-describedby=${describedBy.length > 0 ? describedBy.join(' ') : nothing}
         ?expanded=${expanded}
         ?selected=${selected}
         ?selection-path=${onSelectionPath}

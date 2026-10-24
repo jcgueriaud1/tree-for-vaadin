@@ -10,7 +10,8 @@ import java.util.Objects;
  *
  * <pre>{@code
  * tree.setI18n(new TreeI18n().setLoading("Ladataan…").setEmpty("Ei kohteita")
- *         .setLoadError("Kohteiden lataus epäonnistui"));
+ *         .setLoadError("Kohteiden lataus epäonnistui")
+ *         .setSelectionPath("Sisältää valitun kohteen"));
  * }</pre>
  */
 public class TreeI18n implements Serializable {
@@ -18,6 +19,7 @@ public class TreeI18n implements Serializable {
     private String loading = "Loading…";
     private String empty = "No items";
     private String loadError = "Could not load the items";
+    private String selectionPath = "Contains the selected item";
 
     /**
      * Gets the text shown while items are being fetched.
@@ -82,6 +84,30 @@ public class TreeI18n implements Serializable {
      */
     public TreeI18n setLoadError(String loadError) {
         this.loadError = Objects.requireNonNull(loadError, "loadError");
+        return this;
+    }
+
+    /**
+     * Gets the accessible description of each ancestor of the selected item.
+     *
+     * @return the selection path text, never {@code null}
+     */
+    public String getSelectionPath() {
+        return selectionPath;
+    }
+
+    /**
+     * Sets the accessible description of each ancestor of the selected item,
+     * which tells assistive technology what the selection path marker shows:
+     * that the item contains the selected item, collapsed or not. It is not
+     * shown.
+     *
+     * @param selectionPath
+     *            the selection path text, not {@code null}
+     * @return this object, for chaining
+     */
+    public TreeI18n setSelectionPath(String selectionPath) {
+        this.selectionPath = Objects.requireNonNull(selectionPath, "selectionPath");
         return this;
     }
 }
