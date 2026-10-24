@@ -147,12 +147,13 @@ class TreeTest extends BrowserlessTest {
         assertEquals("Loading…", i18n.getLoading());
         assertEquals("No items", i18n.getEmpty());
         assertEquals("Could not load the items", i18n.getLoadError());
+        assertEquals("Contains the selected item", i18n.getSelectionPath());
     }
 
     @Test
     void theTextsSetAreSentToTheBrowser() {
         TreeI18n i18n = new TreeI18n().setLoading("Ladataan…").setEmpty("Ei kohteita")
-                .setLoadError("Lataus epäonnistui");
+                .setLoadError("Lataus epäonnistui").setSelectionPath("Sisältää valitun kohteen");
 
         tree.setI18n(i18n);
 
@@ -161,6 +162,7 @@ class TreeTest extends BrowserlessTest {
         assertEquals("Ladataan…", sent.get("loading").asString());
         assertEquals("Ei kohteita", sent.get("empty").asString());
         assertEquals("Lataus epäonnistui", sent.get("loadError").asString());
+        assertEquals("Sisältää valitun kohteen", sent.get("selectionPath").asString());
     }
 
     @Test
@@ -169,6 +171,7 @@ class TreeTest extends BrowserlessTest {
         assertThrows(NullPointerException.class, () -> new TreeI18n().setLoading(null));
         assertThrows(NullPointerException.class, () -> new TreeI18n().setEmpty(null));
         assertThrows(NullPointerException.class, () -> new TreeI18n().setLoadError(null));
+        assertThrows(NullPointerException.class, () -> new TreeI18n().setSelectionPath(null));
     }
 
     @Test

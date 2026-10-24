@@ -6,6 +6,7 @@ import static org.junit.jupiter.api.Assertions.assertNotEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.util.List;
+import java.util.regex.Pattern;
 
 import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.AfterEach;
@@ -639,6 +640,9 @@ class TreeViewIT {
         assertThat(item(folders(), label)).hasAttribute("selection-path", "");
         assertThat(item(folders(), label).locator("[part=selection-path-marker]")).isVisible();
         assertThat(item(folders(), label)).hasAttribute("aria-selected", "false");
+        // What the marker shows, told to assistive technology, before the item's tooltip
+        assertThat(item(folders(), label))
+                .hasAccessibleDescription(Pattern.compile("^Contains the selected item\\b"));
     }
 
     /** Tabs from the button just before the folders tree into it, once its items are there. */

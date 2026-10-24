@@ -155,6 +155,17 @@ async function clickLabel(tree: TfvTree, label: string): Promise<void> {
   await settle(tree);
 }
 
+/** The accessible description of an item: the texts its `aria-describedby` points at, in order. */
+function description(tree: TfvTree, label: string): string | undefined {
+  const ids = item(tree, label).getAttribute('aria-describedby');
+  return ids === null
+    ? undefined
+    : ids
+        .split(' ')
+        .map((id) => tree.shadowRoot!.getElementById(id)?.textContent ?? '')
+        .join(' ');
+}
+
 function selectedLabels(tree: TfvTree): string[] {
   return treeItems(tree)
     .filter((element) => element.getAttribute('aria-selected') === 'true')
@@ -469,6 +480,37 @@ describe('tfv-tree', () => {
       expect(item(tree, 'Documents').getAttribute('aria-selected')).to.equal('false');
       expect(item(tree, 'Documents').querySelector('[part="selection-path-marker"]')).to.exist;
       expect(item(tree, '2026').querySelector('[part="selection-path-marker"]')).to.not.exist;
+    });
+
+    it('describes the ancestors of the selected item as containing it, and no other item', async () => {
+      const tree = await treeWith(serverWith(FOLDERS));
+      await clickToggle(tree, 'Documents');
+      await clickToggle(tree, 'Letters');
+
+      await clickLabel(tree, '2026');
+
+      expect(description(tree, 'Documents')).to.equal(DEFAULT_I18N.selectionPath);
+      expect(description(tree, 'Letters')).to.equal(DEFAULT_I18N.selectionPath);
+      for (const label of ['Invoices', '2025', '2026', 'Music']) {
+        expect(item(tree, label).hasAttribute('aria-describedby'), label).to.be.false;
+      }
+
+      await clickToggle(tree, 'Documents');
+      expect(description(tree, 'Documents'), 'collapsed').to.equal(DEFAULT_I18N.selectionPath);
+
+      await clickLabel(tree, 'Music');
+      expect(item(tree, 'Documents').hasAttribute('aria-describedby')).to.be.false;
+    });
+
+    it('describes an ancestor of the selected item as containing it before its tooltip', async () => {
+      const server = serverWith(FOLDERS);
+      server.tooltips = { Documents: 'Your documents' };
+      const tree = await treeWith(server);
+      await clickToggle(tree, 'Documents');
+
+      await clickLabel(tree, 'Invoices');
+
+      expect(description(tree, 'Documents')).to.equal(`${DEFAULT_I18N.selectionPath} Your documents`);
     });
 
     it('keeps the selection when the parent of the selected item is collapsed, showing it on the parent', async () => {
@@ -900,11 +942,6 @@ describe('tfv-tree', () => {
       return tree.shadowRoot!.querySelector('vaadin-tooltip')!;
     }
 
-    function description(tree: TfvTree, label: string): string | undefined {
-      const id = item(tree, label).getAttribute('aria-describedby');
-      return id === null ? undefined : tree.shadowRoot!.getElementById(id)?.textContent!;
-    }
-
     function hover(element: Element): void {
       element.dispatchEvent(new MouseEvent('mouseover', { bubbles: true, composed: true }));
     }
@@ -1171,8 +1208,16 @@ describe('tfv-tree', () => {
       const server = serverWith([['Documents', ['Invoices']]]);
       server.failing = ['0'];
       const tree = await treeWith(server, (element) => {
-        element.i18n = { loading: 'Ladataan…', empty: 'Ei kohteita', loadError: 'Lataus epäonnistui' };
+        element.i18n = {
+          loading: 'Ladataan…',
+          empty: 'Ei kohteita',
+          loadError: 'Lataus epäonnistui',
+          selectionPath: 'Sisältää valitun kohteen',
+        };
       });
+      tree.setSelection(null, '0');
+      await tree.updateComplete;
+      expect(description(tree, 'Documents')).to.equal('Sisältää valitun kohteen');
 
       server.hold = true;
       const refreshed = tree.refresh();

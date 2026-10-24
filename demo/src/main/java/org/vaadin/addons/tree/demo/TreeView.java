@@ -146,10 +146,11 @@ public class TreeView extends Main {
             provider.refreshAll();
         });
 
-        // The texts the tree shows by itself: "Loading…", "No items" and the load error
+        // The texts the tree shows by itself, and the description of the selection path
         Checkbox french = new Checkbox("French texts", event -> tree.setI18n(event.getValue()
                 ? new TreeI18n().setLoading("Chargement…").setEmpty("Aucun élément")
                         .setLoadError("Impossible de charger les éléments")
+                        .setSelectionPath("Contient l’élément sélectionné")
                 : new TreeI18n()));
 
         return new Section(new H2("Projects, changing and failing"), add, removeAll, restore, french, tree,
