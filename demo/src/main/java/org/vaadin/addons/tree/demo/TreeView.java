@@ -92,10 +92,14 @@ public class TreeView extends Main {
         tree.setDataProvider(new CatalogDataProvider());
         tree.setItemLabelGenerator(CatalogDataProvider.Entry::name);
         tree.setItemIconGenerator(entry -> entry instanceof CatalogDataProvider.Category ? "vaadin:folder" : "vaadin:file");
-        // Categories tell how many products they hold; products have no tooltip
-        tree.setItemTooltipGenerator(entry -> entry instanceof CatalogDataProvider.Category category
-                ? category.productCount() + " products"
-                : null);
+        // Categories tell how many products they hold; products out of stock tell why they are disabled
+        tree.setItemTooltipGenerator(entry -> switch (entry) {
+            case CatalogDataProvider.Category category -> category.productCount() + " products";
+            case CatalogDataProvider.Product product -> product.inStock() ? null : "Out of stock";
+        });
+        // Products out of stock cannot be selected
+        tree.setItemEnabledProvider(entry -> !(entry instanceof CatalogDataProvider.Product product)
+                || product.inStock());
         tree.setHeight("20em");
 
         CatalogDataProvider.Product product = new CatalogDataProvider.Product(CatalogDataProvider.CATEGORIES.get(0), 599);

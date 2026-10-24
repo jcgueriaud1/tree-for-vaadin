@@ -27,6 +27,8 @@ type FakeServer = TreeServer & {
   /** The icon and tooltip of items, by label; items not in them have none. */
   icons: Record<string, string>;
   tooltips: Record<string, string>;
+  /** The labels of the disabled items. */
+  disabled: string[];
   /** The keys of the parents whose child items fail to load, null for the root items. */
   failing: (string | null)[];
   /** While true, fetches wait until release() is called. */
@@ -59,6 +61,7 @@ function serverWith(roots: FakeItem[]): FakeServer {
     selectionPath: [],
     icons: {},
     tooltips: {},
+    disabled: [],
     failing: [],
     hold: false,
     release() {
@@ -81,6 +84,7 @@ function serverWith(roots: FakeItem[]): FakeServer {
         const extras = {
           icon: server.icons[label] ?? null,
           tooltip: server.tooltips[label] ?? null,
+          disabled: server.disabled.includes(label),
           selected: key === server.selectedKey,
           onSelectionPath: server.selectionPath.includes(key),
         };
@@ -574,6 +578,41 @@ describe('tfv-tree', () => {
 
       expect(selectedLabels(tree)).to.be.empty;
       expect(server.selections).to.be.empty;
+    });
+
+    it('focuses and expands a disabled item, but does not select it by click, Enter or Space', async () => {
+      const server = serverWith(FOLDERS);
+      server.disabled = ['Documents', 'Music'];
+      const tree = await treeWith(server);
+
+      expect(item(tree, 'Music').getAttribute('aria-disabled')).to.equal('true');
+      expect(item(tree, 'Pictures').hasAttribute('aria-disabled')).to.be.false;
+
+      await clickLabel(tree, 'Music');
+      item(tree, 'Music').focus();
+      await press(tree, 'Enter');
+      await press(tree, ' ');
+      expect(selectedLabels(tree)).to.be.empty;
+      expect(server.selections).to.be.empty;
+      expect(focusedLabel(tree)).to.equal('Music');
+
+      await press(tree, 'ArrowUp');
+      await press(tree, 'ArrowRight');
+      expect(labels(tree)).to.deep.equal(['Documents', 'Invoices', 'Letters', 'Music', 'Pictures']);
+      await clickToggle(tree, 'Documents');
+      expect(labels(tree)).to.deep.equal(['Documents', 'Music', 'Pictures']);
+
+      await clickLabel(tree, 'Pictures');
+      expect(server.selections).to.deep.equal(['2']);
+    });
+
+    it('shows a disabled item the server selects as selected', async () => {
+      const server = serverWith(FOLDERS);
+      server.disabled = ['Music'];
+      server.selectedKey = '1';
+      const tree = await treeWith(server);
+
+      expect(selectedLabels(tree)).to.deep.equal(['Music']);
     });
 
     it('has no accessibility violations with a selection', async () => {
@@ -1198,7 +1237,7 @@ describe('tfv-tree', () => {
       const tree = await treeWith(serverWith(FOLDERS));
 
       const letters = { key: '0/1', label: 'Mail', icon: null, tooltip: null, expandable: true, expanded: true };
-      tree.refreshItem({ ...letters, selected: false, onSelectionPath: false }, true);
+      tree.refreshItem({ ...letters, selected: false, onSelectionPath: false, disabled: false }, true);
       await settle(tree);
 
       expect(labels(tree)).to.deep.equal(['Documents', 'Music', 'Pictures']);
@@ -1246,7 +1285,7 @@ describe('tfv-tree', () => {
 
   describe('styling', () => {
     function stateOf(tree: TfvTree, label: string): string[] {
-      return ['focused', 'focus-ring', 'selected', 'selection-path', 'expanded'].filter((name) =>
+      return ['focused', 'focus-ring', 'selected', 'selection-path', 'expanded', 'disabled'].filter((name) =>
         item(tree, label).hasAttribute(name),
       );
     }
@@ -1307,6 +1346,19 @@ describe('tfv-tree', () => {
       } finally {
         style.remove();
       }
+    });
+
+    it('marks a disabled item, in its part too, and mutes its text', async () => {
+      const server = serverWith(FOLDERS);
+      server.disabled = ['Music'];
+      const tree = await treeWith(server, (element) =>
+        element.style.setProperty('--tfv-tree-disabled-text-color', 'rgb(1, 2, 3)'),
+      );
+
+      expect(stateOf(tree, 'Music')).to.deep.equal(['disabled']);
+      expect(item(tree, 'Music').getAttribute('part')).to.equal('item disabled');
+      expect(getComputedStyle(item(tree, 'Music')).color).to.equal('rgb(1, 2, 3)');
+      expect(getComputedStyle(item(tree, 'Pictures')).color).to.not.equal('rgb(1, 2, 3)');
     });
 
     it('lays the parts out from its --tfv-tree-* properties', async () => {

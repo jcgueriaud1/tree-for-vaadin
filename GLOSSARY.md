@@ -28,6 +28,10 @@ _Avoid_: Rendered item, shown node
 The single item that receives keyboard input; independent of selection.
 _Avoid_: Active item, current item
 
+**Disabled item**:
+An item the user can focus, expand and collapse, but not select.
+_Avoid_: Inactive item, greyed-out item, read-only item (read-only is the whole tree)
+
 ## Selection
 
 **Selected item**:

@@ -5,7 +5,7 @@ import { announce } from '@vaadin/a11y-base/src/announce.js';
 /**
  * An item as the server sends it: the key to refer to it by, its label, its icon and
  * tooltip if any, whether it has child items, whether it is expanded, whether it is
- * the selected item and whether it is on the selection path.
+ * the selected item, whether it is on the selection path and whether it is disabled.
  */
 export interface TreeItem {
   key: string;
@@ -17,6 +17,8 @@ export interface TreeItem {
   expanded: boolean;
   selected: boolean;
   onSelectionPath: boolean;
+  /** A disabled item can be focused and expanded, but not selected. */
+  disabled: boolean;
 }
 
 /** A page of child items, with the number of children the parent has in all. */
@@ -152,7 +154,9 @@ function hasMore(level: Level): boolean {
  * right to left); Enter and Space select the focused item; `*` expands its siblings;
  * typing moves to the next visible item whose label starts with what was typed.
  *
- * Clicking an item selects it, and tells `$server.select`; the server sets the
+ * Clicking an item selects it, and tells `$server.select`, unless the item is
+ * disabled: a disabled item is `aria-disabled`, and can be focused and expanded but
+ * not selected. The server sets the
  * selection with `setSelection`. The ancestors of the selected item have the
  * `selection-path` attribute and a `selection-path-marker` part, and are described
  * as containing it, for assistive technology.
@@ -214,6 +218,10 @@ export class TfvTree extends LitElement {
       --tfv-tree-icon-color: var(--tfv-tree-secondary-text-color);
       --tfv-tree-toggle-color: var(--tfv-tree-secondary-text-color);
       --tfv-tree-error-text-color: var(--aura-red-text, var(--lumo-error-text-color, var(--tfv-tree-text-color)));
+      --tfv-tree-disabled-text-color: var(
+        --lumo-disabled-text-color,
+        var(--vaadin-text-color-disabled, color-mix(in srgb, currentColor 50%, transparent))
+      );
       /* The width of the toggle, and of the spacer standing for it */
       --_toggle-width: 1em;
 
@@ -246,9 +254,15 @@ export class TfvTree extends LitElement {
     }
 
     @media (any-hover: hover) {
-      [part~='item']:not([selected]):hover {
+      [part~='item']:not([selected]):not([disabled]):hover {
         background: var(--tfv-tree-item-hover-background);
       }
+    }
+
+    [part~='item'][disabled] {
+      color: var(--tfv-tree-disabled-text-color);
+      --tfv-tree-icon-color: currentColor;
+      --tfv-tree-toggle-color: currentColor;
     }
 
     [part~='item'][selected] {
@@ -385,6 +399,10 @@ export class TfvTree extends LitElement {
 
       [part='selection-path-marker'] {
         background: CanvasText;
+      }
+
+      [part~='item'][disabled]:not([selected]) {
+        color: GrayText;
       }
     }
   `;
@@ -643,6 +661,7 @@ export class TfvTree extends LitElement {
       'selection-path': onSelectionPath,
       focused,
       'focus-ring': focused && this._focusRing,
+      disabled: item.disabled,
     };
     const part = ['item', ...Object.entries(states).flatMap(([state, on]) => (on ? [state] : []))].join(' ');
     // The marker is for the eyes: the description tells assistive technology
@@ -660,12 +679,14 @@ export class TfvTree extends LitElement {
         aria-expanded=${item.expandable ? String(node.expanded) : nothing}
         aria-busy=${node.expanded && node.children?.loading ? 'true' : nothing}
         aria-selected=${String(selected)}
+        aria-disabled=${item.disabled ? 'true' : nothing}
         aria-describedby=${describedBy.length > 0 ? describedBy.join(' ') : nothing}
         ?expanded=${expanded}
         ?selected=${selected}
         ?selection-path=${onSelectionPath}
         ?focused=${focused}
         ?focus-ring=${states['focus-ring']}
+        ?disabled=${item.disabled}
         tabindex=${!this.disabled && item.key === tabbableKey ? 0 : -1}
         data-key=${item.key}
         style="--_level: ${node.depth - 1}"
@@ -1056,7 +1077,7 @@ export class TfvTree extends LitElement {
   }
 
   private _select(node: Node): void {
-    if (this.readonly || node.item.key === this._selectedKey) {
+    if (this.readonly || node.item.disabled || node.item.key === this._selectedKey) {
       return;
     }
     this._selectedKey = node.item.key;

@@ -528,6 +528,28 @@ class TreeViewIT {
     }
 
     @Test
+    void aDisabledItemCanBeFocusedButNotSelected() {
+        Locator catalogue = page.getByRole(AriaRole.TREE, new Page.GetByRoleOptions().setName("Catalogue"));
+        item(catalogue, "Games").locator("[part=toggle]").click();
+        Locator outOfStock = item(catalogue, "Games item 7");
+        assertThat(outOfStock).hasAttribute("aria-disabled", "true");
+        assertThat(outOfStock).hasAccessibleDescription("Out of stock");
+        assertThat(item(catalogue, "Games item 6")).not().hasAttribute("aria-disabled", "true");
+
+        // Playwright only clicks an aria-disabled element when forced; a user can click it all the same
+        outOfStock.click(new Locator.ClickOptions().setForce(true));
+        page.keyboard().press("Enter");
+
+        assertThat(outOfStock).isFocused();
+        assertThat(outOfStock).hasAttribute("aria-selected", "false");
+        assertThat(catalogueStatus()).hasText("Expanded Games by the user");
+
+        page.keyboard().press("ArrowUp");
+        page.keyboard().press("Enter");
+        assertThat(catalogueStatus()).hasText("Selected Games item 6 by the user");
+    }
+
+    @Test
     void theTextsTheTreeShowsByItselfCanBeTranslated() {
         page.getByRole(AriaRole.BUTTON, new Page.GetByRoleOptions().setName("Remove all projects")).click();
         assertThat(projects().getByText("No items")).isVisible();
@@ -605,6 +627,9 @@ class TreeViewIT {
 
     @Test
     void thePageHasNoAccessibilityViolations() {
+        Locator catalogue = page.getByRole(AriaRole.TREE, new Page.GetByRoleOptions().setName("Catalogue"));
+        item(catalogue, "Games").locator("[part=toggle]").click();
+        assertThat(item(catalogue, "Games item 7")).hasAttribute("aria-disabled", "true");
         page.getByRole(AriaRole.BUTTON, new Page.GetByRoleOptions().setName("Expand all")).click();
         assertThat(item(folders(), "Holidays")).isVisible();
         item(folders(), "2026").click();
@@ -671,6 +696,12 @@ class TreeViewIT {
 
     private Locator projectsStatus() {
         return page.locator("section").filter(new Locator.FilterOptions().setHas(projects())).getByRole(AriaRole.STATUS);
+    }
+
+    private Locator catalogueStatus() {
+        return page.locator("section").filter(new Locator.FilterOptions().setHas(
+                page.getByRole(AriaRole.TREE, new Page.GetByRoleOptions().setName("Catalogue"))))
+                .getByRole(AriaRole.STATUS);
     }
 
     private Locator checkbox(String label) {
