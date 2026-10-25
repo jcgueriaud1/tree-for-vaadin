@@ -391,6 +391,68 @@ class TreeTest extends BrowserlessTest {
     }
 
     @Test
+    void expandingRecursivelyExpandsTheItemsAndTheirDescendantsWithChildItemsToTheDepth() {
+        Folder y2026 = new Folder("2026");
+        TreeData<Folder> data = deepData(y2026);
+        tree.setItems(data);
+        List<ComponentEvent<?>> events = recordEvents();
+
+        tree.expandRecursively(List.of(docs, music), 0);
+        assertEquals(List.of(docs), ((ExpandEvent<?>) events.get(0)).getItems(), "Music has no child items");
+
+        tree.expandRecursively(List.of(docs), 2);
+        assertEquals(List.of(letters), ((ExpandEvent<?>) events.get(1)).getItems(), "2026 has no child items");
+        assertFalse(events.get(1).isFromClient());
+        assertEquals(2, events.size());
+        assertTrue(tree.isExpanded(letters));
+    }
+
+    @Test
+    void collapsingRecursivelyCollapsesTheItemsAndTheirDescendantsToTheDepth() {
+        tree.setItems(deepData(new Folder("2026")));
+        tree.expand(docs, letters);
+        List<ComponentEvent<?>> events = recordEvents();
+
+        tree.collapseRecursively(List.of(docs), 0);
+        assertTrue(tree.isExpanded(letters), "below the depth");
+
+        tree.collapseRecursively(List.of(docs), 1);
+
+        assertFalse(tree.isExpanded(docs));
+        assertFalse(tree.isExpanded(letters));
+        assertEquals(List.of(docs), ((CollapseEvent<?>) events.get(0)).getItems());
+        assertEquals(List.of(letters), ((CollapseEvent<?>) events.get(1)).getItems());
+    }
+
+    @Test
+    void expandingRecursivelyFollowsTheFilterOfTheDataProvider() {
+        Folder y2026 = new Folder("2026");
+        TreeDataProvider<Folder> provider = new TreeDataProvider<>(deepData(y2026));
+        tree.setDataProvider(provider);
+        provider.setFilter(folder -> folder.equals(music));
+        List<ComponentEvent<?>> events = recordEvents();
+
+        tree.expandRecursively(provider.getTreeData().getRootItems(), Integer.MAX_VALUE);
+
+        assertTrue(events.isEmpty(), "nothing under Documents matches, and Music has no child items");
+        assertThrows(IllegalArgumentException.class, () -> tree.expandRecursively(List.of(docs), -1));
+    }
+
+    @Test
+    void anItemWhoseChildItemsAreAllFilteredOutHasNoToggle() {
+        TreeDataProvider<Folder> provider = new TreeDataProvider<>(deepData(new Folder("2026")));
+        tree.setDataProvider(provider);
+
+        provider.setFilter(folder -> !folder.name().equals("2026"));
+
+        TreeItem documents = tree.fetchChildren(null, 0, 50).items().get(0);
+        assertTrue(documents.expandable());
+        TreeItem lettersItem = tree.fetchChildren(documents.key(), 0, 50).items().get(0);
+        assertEquals("Letters", lettersItem.label());
+        assertFalse(lettersItem.expandable(), "its only child item is filtered out");
+    }
+
+    @Test
     void theUserExpandingAnItemNoLongerKnownIsIgnored() {
         List<ComponentEvent<?>> events = recordEvents();
 
@@ -798,6 +860,15 @@ class TreeTest extends BrowserlessTest {
     private String key(Folder rootItem) {
         return tree.fetchChildren(null, 0, 50).items().stream()
                 .filter(item -> item.label().equals(rootItem.name())).findFirst().orElseThrow().key();
+    }
+
+    /** Documents holding Letters holding the given folder, and Music. */
+    private TreeData<Folder> deepData(Folder inLetters) {
+        TreeData<Folder> data = new TreeData<>();
+        data.addRootItems(docs, music);
+        data.addItem(docs, letters);
+        data.addItem(letters, inLetters);
+        return data;
     }
 
     private static List<Boolean> editable(ItemPage page) {

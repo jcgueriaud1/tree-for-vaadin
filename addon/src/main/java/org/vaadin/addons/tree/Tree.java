@@ -430,6 +430,77 @@ public class Tree<T> extends Component
     }
 
     /**
+     * Expands items and their descendants down to a depth, as TreeGrid does:
+     * to show the items a filter of the data provider matches, for instance.
+     * Items without child items are left as they are. Fires one
+     * {@link ExpandEvent} for the items at each depth that were collapsed.
+     * <p>
+     * The child items of each item down to the depth are fetched from the
+     * data provider, with its filter; mind the cost with a large backend.
+     *
+     * @param items
+     *            the items, not {@code null}
+     * @param depth
+     *            how many levels below the items to expand: 0 expands the
+     *            items alone
+     * @throws IllegalArgumentException
+     *             if the depth is negative
+     */
+    public void expandRecursively(Collection<T> items, int depth) {
+        setExpandedRecursively(items, depth, true);
+    }
+
+    /**
+     * Collapses items and their descendants down to a depth, as TreeGrid
+     * does, so that they come collapsed when expanded again. Fires one
+     * {@link CollapseEvent} for the items at each depth that were expanded.
+     *
+     * @param items
+     *            the items, not {@code null}
+     * @param depth
+     *            how many levels below the items to collapse: 0 collapses the
+     *            items alone
+     * @throws IllegalArgumentException
+     *             if the depth is negative
+     */
+    public void collapseRecursively(Collection<T> items, int depth) {
+        setExpandedRecursively(items, depth, false);
+    }
+
+    private void setExpandedRecursively(Collection<T> items, int depth, boolean expanded) {
+        if (depth < 0) {
+            throw new IllegalArgumentException("depth must not be negative: " + depth);
+        }
+        List<T> parents = items.stream().filter(this::hasChildren).toList();
+        setExpanded(parents, expanded, false);
+        if (depth > 0 && !parents.isEmpty()) {
+            setExpandedRecursively(parents.stream().flatMap(this::children).toList(), depth - 1, expanded);
+        }
+    }
+
+    /** All the child items of an item, with the data provider's filter. */
+    private Stream<T> children(T parent) {
+        return children(dataProvider, parent);
+    }
+
+    private <F> Stream<T> children(HierarchicalDataProvider<T, F> provider, T parent) {
+        return provider.fetchChildren(new HierarchicalQuery<>(null, parent));
+    }
+
+    /**
+     * Tells whether an item has child items. An in-memory data provider counts
+     * them, with its filter, which {@code hasChildren} ignores; a backend is
+     * trusted with {@code hasChildren}, to spare it a count for each item.
+     */
+    private boolean hasChildren(T item) {
+        return dataProvider.isInMemory() ? childCount(dataProvider, item) > 0 : dataProvider.hasChildren(item);
+    }
+
+    private <F> int childCount(HierarchicalDataProvider<T, F> provider, T parent) {
+        return provider.getChildCount(new HierarchicalQuery<>(null, parent));
+    }
+
+    /**
      * Tells whether an item is expanded.
      *
      * @param item
@@ -728,7 +799,7 @@ public class Tree<T> extends Component
     }
 
     private <F> ItemPage fetchChildren(HierarchicalDataProvider<T, F> provider, T parent, int offset, int limit) {
-        int size = provider.getChildCount(new HierarchicalQuery<>(null, parent));
+        int size = childCount(provider, parent);
         List<TreeItem> items = provider
                 .fetchChildren(new HierarchicalQuery<>(offset, limit, List.of(), null, null, parent))
                 .map(this::treeItem)
@@ -739,7 +810,7 @@ public class Tree<T> extends Component
     private TreeItem treeItem(T item) {
         Object id = dataProvider.getId(item);
         return new TreeItem(keyMapper.key(item), itemLabelGenerator.apply(item), itemIconGenerator.apply(item),
-                itemTooltipGenerator.apply(item), dataProvider.hasChildren(item), isExpanded(item),
+                itemTooltipGenerator.apply(item), hasChildren(item), isExpanded(item),
                 Objects.equals(id, idOf(selectedItem)), selectionPathIds.contains(id), !itemEnabledProvider.test(item),
                 itemEditableProvider.test(item));
     }

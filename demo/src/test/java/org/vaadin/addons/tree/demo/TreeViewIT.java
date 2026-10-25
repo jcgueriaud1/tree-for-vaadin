@@ -225,7 +225,8 @@ class TreeViewIT {
     void scrollingToAnItemWhoseAncestorsWereNeverFetchedFetchesThePagesOnTheWay() {
         Locator catalogue = page.getByRole(AriaRole.TREE, new Page.GetByRoleOptions().setName("Catalogue"));
 
-        page.getByRole(AriaRole.BUTTON, new Page.GetByRoleOptions().setName("Show and select Books item 600")).click();
+        page.getByLabel("Find a product").fill("books item 600");
+        page.getByRole(AriaRole.BUTTON, new Page.GetByRoleOptions().setName("Find").setExact(true)).click();
 
         Locator product = item(catalogue, "Books item 600");
         assertThat(product).isInViewport();
@@ -631,6 +632,37 @@ class TreeViewIT {
         assertThat(editor).hasCount(0);
         assertThat(item(projects(), "Archive")).isFocused();
         assertThat(projectsStatus()).hasText("");
+    }
+
+    @Test
+    void filteringShowsTheMatchingItemsWithTheirAncestorsExpanded() {
+        Locator filter = page.getByLabel("Filter folders");
+
+        filter.fill("20");
+
+        assertThat(folders().getByRole(AriaRole.TREEITEM))
+                .hasText(new String[] { "Documents", "Letters", "2025", "2026" });
+        assertThat(item(folders(), "Letters")).hasAttribute("aria-setsize", "1");
+        assertThat(status()).hasText("2 folders match");
+
+        filter.fill("nothing like it");
+        assertThat(folders().getByText("No folder matches")).isVisible();
+        assertThat(folders()).hasAccessibleDescription("No folder matches");
+        assertThat(status()).hasText("0 folders match");
+
+        filter.fill("");
+        assertThat(status()).hasText("Showing all folders");
+        // What the filter expanded stays expanded
+        assertThat(folders().getByRole(AriaRole.TREEITEM)).hasText(new String[] { "Documents", "Invoices", "Letters",
+                "2025", "2026", "Music", "Pictures" });
+    }
+
+    @Test
+    void searchingForAProductNotFetchedYetSaysSoWhenThereIsNone() {
+        page.getByLabel("Find a product").fill("Toys item 1");
+        page.getByLabel("Find a product").press("Enter");
+
+        assertThat(page.getByRole(AriaRole.STATUS).nth(1)).hasText("No product named Toys item 1");
     }
 
     @Test

@@ -1,12 +1,14 @@
 package org.vaadin.addons.tree.demo;
 
 import java.util.List;
+import java.util.Locale;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.function.Function;
 import java.util.stream.Collectors;
 import java.util.stream.Stream;
 
 import com.vaadin.flow.component.ComponentEvent;
+import com.vaadin.flow.component.Key;
 import com.vaadin.flow.component.button.Button;
 import com.vaadin.flow.component.checkbox.Checkbox;
 import com.vaadin.flow.component.html.Div;
@@ -15,10 +17,12 @@ import com.vaadin.flow.component.html.H2;
 import com.vaadin.flow.component.html.Main;
 import com.vaadin.flow.component.html.Paragraph;
 import com.vaadin.flow.component.html.Section;
+import com.vaadin.flow.component.textfield.TextField;
 import com.vaadin.flow.data.binder.Binder;
 import com.vaadin.flow.data.provider.hierarchy.HierarchicalQuery;
 import com.vaadin.flow.data.provider.hierarchy.TreeData;
 import com.vaadin.flow.data.provider.hierarchy.TreeDataProvider;
+import com.vaadin.flow.data.value.ValueChangeMode;
 import com.vaadin.flow.function.SerializablePredicate;
 import com.vaadin.flow.router.PageTitle;
 import com.vaadin.flow.router.Route;
@@ -107,9 +111,10 @@ public class TreeView extends Main {
 
     private static Section folders() {
         TreeData<Folder> data = folderData();
+        TreeDataProvider<Folder> provider = new TreeDataProvider<>(data);
         Tree<Folder> tree = newTree();
         tree.setAriaLabel("Folders");
-        tree.setItems(data);
+        tree.setDataProvider(provider);
         tree.setItemLabelGenerator(Folder::name);
         tree.setItemIconGenerator(folder -> "vaadin:folder");
         // The path of a child item; a root item needs none
@@ -144,9 +149,29 @@ public class TreeView extends Main {
         Button select = new Button("Select 2026", event -> tree.asSingleSelect().setValue(year));
         Button show = new Button("Show 2026", event -> tree.scrollToItem(year));
         Button clear = new Button("Clear selection", event -> tree.asSingleSelect().clear());
+        Paragraph log = eventLog(tree, Folder::name);
 
-        return new Section(new H2("Folders, in memory"), expandAll, collapseAll, select, show, clear, tree,
-                eventLog(tree, Folder::name));
+        // Typing filters the folders, keeping the ancestors of those that match, expanded to show them
+        TextField filter = new TextField("Filter folders");
+        filter.setClearButtonVisible(true);
+        filter.setValueChangeMode(ValueChangeMode.LAZY);
+        tree.setI18n(new TreeI18n().setEmpty("No folder matches"));
+        filter.addValueChangeListener(event -> {
+            String text = event.getValue().strip().toLowerCase(Locale.ROOT);
+            if (text.isEmpty()) {
+                provider.clearFilters();
+                log.setText("Showing all folders");
+                return;
+            }
+            SerializablePredicate<Folder> matches = folder -> folder.name().toLowerCase(Locale.ROOT).contains(text);
+            provider.setFilter(matches);
+            tree.expandRecursively(data.getRootItems(), Integer.MAX_VALUE);
+            long count = descendants(data, null).filter(matches).count();
+            log.setText(count == 1 ? "1 folder matches" : count + " folders match");
+        });
+
+        return new Section(new H2("Folders, in memory"), filter, expandAll, collapseAll, select, show, clear, tree,
+                log);
     }
 
     private static Section catalogue() {
@@ -165,14 +190,20 @@ public class TreeView extends Main {
                 || product.inStock());
         tree.setHeight("20em");
 
-        CatalogDataProvider.Product product = new CatalogDataProvider.Product(CatalogDataProvider.CATEGORIES.get(0), 599);
-        Button show = new Button("Show and select " + product.name(), event -> {
-            tree.scrollToItem(product);
-            tree.asSingleSelect().setValue(product);
-        });
+        Paragraph log = eventLog(tree, CatalogDataProvider.Entry::name);
 
-        return new Section(new H2("Catalogue, from a backend"), show, tree,
-                eventLog(tree, CatalogDataProvider.Entry::name));
+        // A search the backend answers: the tree fetches the pages down to the product, then shows and selects it
+        TextField search = new TextField("Find a product");
+        search.setPlaceholder("Books item 600");
+        Button find = new Button("Find", event -> CatalogDataProvider.find(search.getValue()).ifPresentOrElse(
+                product -> {
+                    tree.scrollToItem(product);
+                    tree.asSingleSelect().setValue(product);
+                },
+                () -> log.setText("No product named " + search.getValue().strip())));
+        search.addKeyDownListener(Key.ENTER, event -> find.click());
+
+        return new Section(new H2("Catalogue, from a backend"), search, find, tree, log);
     }
 
     /**
