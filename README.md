@@ -254,9 +254,26 @@ tree.addDropListener(event -> {
 });
 ```
 
-Drag and drop uses the browser's own, which most touch screens lack, and they have no Ctrl+X either: there, offer
-moves in a context menu, items such as "Move into…" that change the data as a drop would. The demo's projects can
-be dragged and cut.
+Drag and drop uses the browser's own, which most touch screens lack, and they have no Ctrl+X either. There, move
+items from a context menu, which a long press opens: `cutItem(item)` cuts an item as Ctrl+X does, showing it cut
+and announcing it, and `pasteInto`, `pasteBefore` and `pasteAfter` drop it, firing the same `DropEvent`, if it can
+go there; they return whether it did. `getCutItem()` tells what is cut, by the menu or by Ctrl+X, and
+`cancelCut()` cancels it, as Escape does.
+
+```java
+TreeContextMenu<Project> menu = tree.addContextMenu();
+menu.setDynamicContentHandler(project -> {
+    menu.removeAll();
+    menu.addItem("Cut", event -> tree.cutItem(project));
+    tree.getCutItem().ifPresent(cut -> {
+        menu.addItem("Paste into", event -> tree.pasteInto(project));
+        menu.addItem("Paste before", event -> tree.pasteBefore(project));
+    });
+    return project != null;
+});
+```
+
+The demo's projects can be dragged, cut and pasted with the keyboard, and cut and pasted from their context menu.
 
 ### Filtering and search
 
@@ -309,8 +326,8 @@ A tree without items shows "No items" (part `empty`), which is also its accessib
 (`aria-description`), unless the app gives the tree a description of its own.
 
 The texts the tree shows by itself, "Loading…", "No items" and the load error, and the description of the
-selection path, "Contains the selected item", and the name of the text field that renames an item, "Label", are
-English by default and set with `setI18n`. Set the object again after changing it:
+selection path, "Contains the selected item", the name of the text field that renames an item, "Label", and what is
+announced when an item is cut (`cut` and, after Ctrl+X, `cutHint`), are English by default and set with `setI18n`. Set the object again after changing it:
 
 ```java
 tree.setI18n(new TreeI18n()

@@ -49,6 +49,7 @@ export interface TreeServer {
   edit(key: string, label: string): unknown;
   setChecked(key: string, checked: boolean): unknown;
   drop(draggedKey: string, targetKey: string, location: DropLocation): unknown;
+  cut(key: string | null): unknown;
 }
 
 /** How many items are fetched at once, unless the server sets `pageSize`. */
@@ -83,8 +84,10 @@ export interface TreeI18n {
   selectionPath: string;
   /** The accessible name of the text field that edits the label of an item. */
   editor: string;
-  /** Announced when the user cuts an item to move it with the keyboard; `{0}` stands for its label. */
+  /** Announced when an item is cut, to be moved; `{0}` stands for its label. */
   cut: string;
+  /** Announced after `cut` when the user cuts an item with Ctrl+X: how to paste it. */
+  cutHint: string;
 }
 
 export const DEFAULT_I18N: TreeI18n = {
@@ -93,7 +96,8 @@ export const DEFAULT_I18N: TreeI18n = {
   loadError: 'Could not load the items',
   selectionPath: 'Contains the selected item',
   editor: 'Label',
-  cut: '{0} cut. Ctrl+V moves it into the focused item, Ctrl+Shift+V before it, Escape cancels.',
+  cut: '{0} cut.',
+  cutHint: 'Ctrl+V moves it into the focused item, Ctrl+Shift+V before it, Escape cancels.',
 };
 
 /** The id of the hidden text that describes each ancestor of the selected item. */
@@ -201,6 +205,7 @@ function hasMore(level: Level): boolean {
  * the pointer is over it (states `drop-before`, `drop-into`, `drop-after` on the target,
  * `dragged` on the item dragged), or cut with Ctrl+X and pasted into the focused item
  * with Ctrl+V, before it with Ctrl+Shift+V (state `cut`). Either calls `$server.drop`;
+ * the server learns of the cut item with `$server.cut`, and cuts one with `cutItem`;
  * an item is never dropped on itself, into its descendants, or on an item that takes
  * no drops.
  *
@@ -732,6 +737,18 @@ export class TfvTree extends LitElement {
   setChecked(checkedKeys: string[], partialKeys: string[]): void {
     this._checkedKeys = new Set(checkedKeys);
     this._partialKeys = new Set(partialKeys);
+  }
+
+  /**
+   * Shows an item cut, to be moved, and says so, or none if the key is null. Called
+   * by the server, from a context menu for instance; Ctrl+V pastes it as if cut here.
+   */
+  cutItem(key: string | null): void {
+    const node = key === null ? undefined : this._nodes.get(key);
+    this._cutKey = node ? key : null;
+    if (node) {
+      announce(this.i18n.cut.replace('{0}', node.item.label));
+    }
   }
 
   /** Edits the label of an item, if it is shown and editable. Called by the server. */
@@ -1442,7 +1459,8 @@ export class TfvTree extends LitElement {
     const key = event.key.toLowerCase();
     if (key === 'x' && !event.shiftKey && this._canDrag(node)) {
       this._cutKey = node.item.key;
-      announce(this.i18n.cut.replace('{0}', node.item.label));
+      this.$server?.cut(node.item.key);
+      announce(`${this.i18n.cut.replace('{0}', node.item.label)} ${this.i18n.cutHint}`);
       return true;
     }
     const cut = this._cutKey === null ? undefined : this._nodes.get(this._cutKey);
@@ -1576,6 +1594,7 @@ export class TfvTree extends LitElement {
     if (event.key === 'Escape' && this._cutKey !== null) {
       // Cancelling the cut is all Escape does, so that it does not also close a dialog
       this._cutKey = null;
+      this.$server?.cut(null);
       event.preventDefault();
       event.stopPropagation();
       return;

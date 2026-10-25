@@ -731,6 +731,30 @@ class TreeViewIT {
     }
 
     @Test
+    void onAPhoneTheContextMenuCutsAndPastesAProject() {
+        try (BrowserContext phone = phone()) {
+            Page page = phone.newPage();
+            page.navigate(URL);
+            Locator projects = page.getByRole(AriaRole.TREE, new Page.GetByRoleOptions().setName("Projects"));
+            Locator drafts = item(projects, "Drafts");
+
+            // A long press fires contextmenu on Android, as a right-click does
+            drafts.dispatchEvent("contextmenu");
+            page.getByRole(AriaRole.MENUITEM, new Page.GetByRoleOptions().setName("Cut")).tap();
+            assertThat(drafts).hasAttribute("cut", "");
+            // A menu opened while the last one is still closing would show the last one's items again
+            assertThat(page.getByRole(AriaRole.MENUITEM)).hasCount(0);
+            item(projects, "Reports").dispatchEvent("contextmenu");
+            page.getByRole(AriaRole.MENUITEM, new Page.GetByRoleOptions().setName("Paste before")).tap();
+
+            assertThat(projects.getByRole(AriaRole.TREEITEM)).hasText(new String[] { "Drafts", "Reports", "Archive" });
+            assertThat(page.locator("section").filter(new Locator.FilterOptions().setHas(projects))
+                    .getByRole(AriaRole.STATUS)).hasText("Moved Drafts before Reports by the user");
+            assertThat(item(projects, "Drafts")).not().hasAttribute("cut", "");
+        }
+    }
+
+    @Test
     void theTextsTheTreeShowsByItselfCanBeTranslated() {
         page.getByRole(AriaRole.BUTTON, new Page.GetByRoleOptions().setName("Remove all projects")).click();
         assertThat(projects().getByText("No items")).isVisible();
