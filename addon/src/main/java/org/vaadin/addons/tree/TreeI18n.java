@@ -21,6 +21,7 @@ public class TreeI18n implements Serializable {
     private String loadError = "Could not load the items";
     private String selectionPath = "Contains the selected item";
     private String editor = "Label";
+    private String cut = "{0} cut. Ctrl+V moves it into the focused item, Ctrl+Shift+V before it, Escape cancels.";
 
     /**
      * Gets the text shown while items are being fetched.
@@ -132,6 +133,31 @@ public class TreeI18n implements Serializable {
      */
     public TreeI18n setEditor(String editor) {
         this.editor = Objects.requireNonNull(editor, "editor");
+        return this;
+    }
+
+    /**
+     * Gets the text announced when the user cuts an item with Ctrl+X, to move
+     * it with the keyboard; {@code {0}} stands for the item's label.
+     *
+     * @return the cut text, never {@code null}
+     */
+    public String getCut() {
+        return cut;
+    }
+
+    /**
+     * Sets the text announced to assistive technology when the user cuts an
+     * item with Ctrl+X, to move it with the keyboard, see
+     * {@link Tree#setItemDraggableProvider}; {@code {0}} stands for the item's
+     * label. It is not shown.
+     *
+     * @param cut
+     *            the cut text, not {@code null}
+     * @return this object, for chaining
+     */
+    public TreeI18n setCut(String cut) {
+        this.cut = Objects.requireNonNull(cut, "cut");
         return this;
     }
 }

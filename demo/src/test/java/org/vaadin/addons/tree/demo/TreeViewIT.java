@@ -699,6 +699,38 @@ class TreeViewIT {
     }
 
     @Test
+    void draggingAProjectMovesItBeforeIntoOrAfterAnother() {
+        Locator drafts = item(projects(), "Drafts");
+        Locator reports = item(projects(), "Reports");
+
+        // The top quarter of Reports: before it
+        drafts.dragTo(reports, new Locator.DragToOptions().setTargetPosition(20, 2));
+        assertThat(projects().getByRole(AriaRole.TREEITEM)).hasText(new String[] { "Drafts", "Reports", "Archive" });
+        assertThat(projectsStatus()).hasText("Moved Drafts before Reports by the user");
+
+        // The middle of Reports: into it, last among its child items
+        item(projects(), "Archive").dragTo(item(projects(), "Reports"));
+        assertThat(projectsStatus()).hasText("Moved Archive into Reports by the user");
+        item(projects(), "Reports").locator("[part=toggle]").click();
+        assertThat(projects().getByRole(AriaRole.TREEITEM))
+                .hasText(new String[] { "Drafts", "Reports", "Report 1", "Archive" });
+    }
+
+    @Test
+    void ctrlXThenCtrlVMovesTheFocusedProjectWithTheKeyboard() {
+        item(projects(), "Drafts").click();
+        page.keyboard().press("Control+x");
+        assertThat(item(projects(), "Drafts")).hasAttribute("cut", "");
+
+        page.keyboard().press("Home");
+        page.keyboard().press("Control+Shift+v");
+
+        assertThat(projects().getByRole(AriaRole.TREEITEM)).hasText(new String[] { "Drafts", "Reports", "Archive" });
+        assertThat(projectsStatus()).hasText("Moved Drafts before Reports by the user");
+        assertThat(item(projects(), "Drafts")).not().hasAttribute("cut", "");
+    }
+
+    @Test
     void theTextsTheTreeShowsByItselfCanBeTranslated() {
         page.getByRole(AriaRole.BUTTON, new Page.GetByRoleOptions().setName("Remove all projects")).click();
         assertThat(projects().getByText("No items")).isVisible();

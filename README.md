@@ -18,7 +18,8 @@ The words in bold below are defined in [GLOSSARY.md](GLOSSARY.md); the design de
 - **Expanding** and **collapsing** by the user or by the server, with events telling which.
 - One **selected item**, bound like any field with `asSingleSelect()`, with its ancestors marked; or checkboxes,
   where checking a parent checks its descendants, loaded or not, with `asMultiSelect()`.
-- Icons and tooltips on items, a context menu, and renaming items in place.
+- Icons and tooltips on items, a context menu, renaming items in place, and moving them by drag and drop or with
+  the keyboard.
 - Filtering through the data provider, and searching for items not loaded yet.
 - Data refreshes that keep the state of the tree, and messages for an empty tree and for items that fail to load,
   in your language.
@@ -26,7 +27,7 @@ The words in bold below are defined in [GLOSSARY.md](GLOSSARY.md); the design de
 - Touch screens: items and their toggle are fingertip-sized there.
 - The Aura and Lumo themes, light or dark, and styling through parts and CSS custom properties.
 
-Drag and drop and the other ideas for later are in the [issues](https://github.com/jcgueriaud1/tree-for-vaadin/issues).
+Virtual scrolling and the other ideas for later are in the [issues](https://github.com/jcgueriaud1/tree-for-vaadin/issues).
 
 ## Installation
 
@@ -233,6 +234,30 @@ menu.addItem("Rename", event -> menu.getTargetItem().ifPresent(tree::editItem));
 `editItem(item)` starts renaming an item the browser shows. Disabled items, and any item while the selection is
 read-only, cannot be renamed. The text field is named "Label" for assistive technology (`TreeI18n.setEditor`).
 
+### Moving items: drag and drop
+
+`setItemDraggableProvider` lets the user move items: drag one and drop it before, into or after another, by where
+the pointer is over it (its top quarter, middle or bottom quarter), or, with the keyboard, cut the focused item with
+Ctrl+X (⌘X) and paste it into the focused item with Ctrl+V, or before it with Ctrl+Shift+V; Escape cancels. The
+tree announces how to paste when an item is cut. An item is never dropped on itself nor into its own descendants,
+and `setItemDroppableProvider` keeps drops off items. Disabled items, and any item while the selection is
+read-only, cannot be moved.
+
+Dropping fires a `DropEvent`; the tree moves nothing itself, so move the item in your data and refresh it:
+
+```java
+tree.setItemDraggableProvider(project -> true);
+tree.setItemDroppableProvider(project -> !project.isArchived());
+tree.addDropListener(event -> {
+    projects.move(event.getDraggedItem(), event.getTargetItem(), event.getLocation()); // BEFORE, AFTER or INTO
+    tree.getDataProvider().refreshAll();     // expanded items stay expanded
+});
+```
+
+Drag and drop uses the browser's own, which most touch screens lack, and they have no Ctrl+X either: there, offer
+moves in a context menu, items such as "Move into…" that change the data as a drop would. The demo's projects can
+be dragged and cut.
+
 ### Filtering and search
 
 The tree shows what its data provider gives it, filter included. `TreeDataProvider`'s filter keeps the ancestors
@@ -328,6 +353,7 @@ does not follow focus: moving the **focused item** never changes the selected it
 | `*` | Expands the focused item and its siblings, in one `ExpandEvent` |
 | Shift+F10, Menu key | Opens the context menu of the focused item, if the tree has one |
 | F2 | Renames the focused item, if it can be renamed; then Enter saves and Escape cancels |
+| Ctrl+X, then Ctrl+V or Ctrl+Shift+V | Moves the focused item, if it can be moved, into or before the item focused then; Escape cancels |
 | Any character | Moves focus to the next visible item whose label starts with it; characters typed within half a second, spaces included, are searched together |
 
 Left and Right are swapped when the tree is right to left (`dir="rtl"`). Type-ahead only searches the items
@@ -394,6 +420,8 @@ the shadow DOM, the same states are attributes of the item.
 | `partially-checked` | some of the item's descendants are checked, but not all |
 | `focused` | the item has focus |
 | `focus-ring` | the item has focus from the keyboard, and shows a focus ring |
+| `dragged`, `cut` | the item is being dragged, or was cut with Ctrl+X to be moved |
+| `drop-before`, `drop-into`, `drop-after` | the item dragged would be dropped before, into or after this item |
 | `disabled` | the item is disabled by `setItemEnabledProvider` |
 
 | Custom property | Default: Aura, else Lumo, else the Vaadin base styles |
@@ -415,6 +443,7 @@ the shadow DOM, the same states are attributes of the item.
 | `--tfv-tree-selection-path-color` | `--aura-accent-text-color` / `--lumo-primary-text-color` |
 | `--tfv-tree-checkbox-color`, `--tfv-tree-checkbox-mark-color` | the fill of a checked checkbox and its mark: as the selected item's background and text |
 | `--tfv-tree-focus-ring-color` | `--lumo-primary-text-color` / `--vaadin-focus-ring-color` (Aura sets the latter) |
+| `--tfv-tree-drop-indicator-color` | where a dragged item would go: `--tfv-tree-focus-ring-color` |
 | `--tfv-tree-focus-ring-width` | `--vaadin-focus-ring-width`, or 2px |
 
 The defaults meet WCAG contrast in Aura, Lumo light and Lumo dark: text 4.5:1, and the selected fill, focus ring
