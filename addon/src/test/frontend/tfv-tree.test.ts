@@ -33,6 +33,11 @@ type FakeServer = TreeServer & {
   editable: string[];
   /** The edit calls made, as [key, label]. */
   edits: string[][];
+  /** Whether the tree is in checkbox selection mode, and the state of the items not unchecked, by label. */
+  checkboxes: boolean;
+  checked: Record<string, 'true' | 'mixed'>;
+  /** The setChecked calls made, as [key, checked]. */
+  checks: unknown[][];
   /** The keys of the parents whose child items fail to load, null for the root items. */
   failing: (string | null)[];
   /** While true, fetches wait until release() is called. */
@@ -68,6 +73,9 @@ function serverWith(roots: FakeItem[]): FakeServer {
     disabled: [],
     editable: [],
     edits: [],
+    checkboxes: false,
+    checked: {},
+    checks: [],
     failing: [],
     hold: false,
     release() {
@@ -92,6 +100,7 @@ function serverWith(roots: FakeItem[]): FakeServer {
           tooltip: server.tooltips[label] ?? null,
           disabled: server.disabled.includes(label),
           editable: server.editable.includes(label),
+          checked: server.checkboxes ? (server.checked[label] ?? 'false') : null,
           selected: key === server.selectedKey,
           onSelectionPath: server.selectionPath.includes(key),
         };
@@ -109,6 +118,9 @@ function serverWith(roots: FakeItem[]): FakeServer {
     },
     edit(key, label) {
       server.edits.push([key, label]);
+    },
+    setChecked(key, checked) {
+      server.checks.push([key, checked]);
     },
   };
   return server;
@@ -979,6 +991,116 @@ describe('tfv-tree', () => {
     });
   });
 
+  describe('checkbox selection', () => {
+    function checkState(tree: TfvTree): Record<string, string | null> {
+      return Object.fromEntries(treeItems(tree).map((element) => [element.textContent!.trim(), element.getAttribute('aria-checked')]));
+    }
+
+    async function checkboxTree(checked: Record<string, 'true' | 'mixed'> = {}): Promise<{ tree: TfvTree; server: FakeServer }> {
+      const server = serverWith(FOLDERS);
+      server.checkboxes = true;
+      server.checked = checked;
+      const tree = await treeWith(server);
+      return { tree, server };
+    }
+
+    it('gives each item a checkbox and aria-checked instead of aria-selected', async () => {
+      const { tree } = await checkboxTree({ Documents: 'mixed', Music: 'true' });
+
+      expect(checkState(tree)).to.deep.equal({ Documents: 'mixed', Music: 'true', Pictures: 'false' });
+      for (const element of treeItems(tree)) {
+        expect(element.querySelector('[part="checkbox"]')!.getAttribute('aria-hidden')).to.equal('true');
+        expect(element.hasAttribute('aria-selected')).to.be.false;
+      }
+      expect(item(tree, 'Documents').getAttribute('part')).to.equal('item partially-checked');
+      expect(item(tree, 'Music').getAttribute('part')).to.equal('item checked');
+      await expect(tree).to.be.accessible();
+    });
+
+    it('has no checkboxes in single selection mode', async () => {
+      const tree = await treeWith(serverWith(FOLDERS));
+
+      expect(tree.shadowRoot!.querySelector('[part="checkbox"]')).to.equal(null);
+      expect(item(tree, 'Music').hasAttribute('aria-checked')).to.be.false;
+    });
+
+    it('asks the server to check or uncheck an item on click, Space or Enter, a partially checked one as a whole', async () => {
+      const { tree, server } = await checkboxTree({ Documents: 'mixed', Music: 'true' });
+
+      await clickLabel(tree, 'Pictures');
+      await clickLabel(tree, 'Music');
+      await clickLabel(tree, 'Documents');
+      item(tree, 'Pictures').focus();
+      await press(tree, ' ');
+      await press(tree, 'Enter');
+
+      expect(server.checks).to.deep.equal([
+        ['2', true],
+        ['1', false],
+        ['0', true],
+        ['2', true],
+        ['2', true],
+      ]);
+      expect(server.selections).to.be.empty;
+    });
+
+    it('expands an item from its toggle without checking it', async () => {
+      const { tree, server } = await checkboxTree();
+
+      await clickToggle(tree, 'Documents');
+
+      expect(labels(tree)).to.deep.equal(['Documents', 'Invoices', 'Letters', 'Music', 'Pictures']);
+      expect(server.checks).to.be.empty;
+    });
+
+    it('shows the checked items the server sends, checking the descendants of a checked item', async () => {
+      const { tree } = await checkboxTree();
+      await clickToggle(tree, 'Documents');
+      await clickToggle(tree, 'Letters');
+
+      tree.setChecked(['0/1'], ['0']);
+      await tree.updateComplete;
+
+      expect(checkState(tree)).to.deep.equal({
+        Documents: 'mixed',
+        Invoices: 'false',
+        Letters: 'true',
+        2025: 'true',
+        2026: 'true',
+        Music: 'false',
+        Pictures: 'false',
+      });
+
+      tree.setChecked([], []);
+      await tree.updateComplete;
+      expect(Object.values(checkState(tree))).to.deep.equal(Array(7).fill('false'));
+    });
+
+    it('keeps the child items of a checked item checked when they are fetched', async () => {
+      const { tree } = await checkboxTree({ Documents: 'true' });
+
+      await clickToggle(tree, 'Documents');
+
+      expect(checkState(tree)).to.include({ Invoices: 'true', Letters: 'true' });
+    });
+
+    it('does not check while disabled, read-only, or on a disabled item', async () => {
+      const server = serverWith(FOLDERS);
+      server.checkboxes = true;
+      server.disabled = ['Music'];
+      const tree = await treeWith(server);
+
+      await clickLabel(tree, 'Music');
+      tree.readonly = true;
+      await clickLabel(tree, 'Pictures');
+      tree.readonly = false;
+      tree.disabled = true;
+      await clickLabel(tree, 'Pictures');
+
+      expect(server.checks).to.be.empty;
+    });
+  });
+
   describe('editing labels', () => {
     function editor(tree: TfvTree): HTMLInputElement | null {
       return tree.shadowRoot!.querySelector<HTMLInputElement>('[part="editor"]');
@@ -1440,7 +1562,10 @@ describe('tfv-tree', () => {
       const tree = await treeWith(serverWith(FOLDERS));
 
       const letters = { key: '0/1', label: 'Mail', icon: null, tooltip: null, expandable: true, expanded: true };
-      tree.refreshItem({ ...letters, selected: false, onSelectionPath: false, disabled: false, editable: false }, true);
+      tree.refreshItem(
+        { ...letters, selected: false, onSelectionPath: false, disabled: false, editable: false, checked: null },
+        true,
+      );
       await settle(tree);
 
       expect(labels(tree)).to.deep.equal(['Documents', 'Music', 'Pictures']);

@@ -49,3 +49,7 @@ _Avoid_: Selected item (in checkbox mode), ticked item
 **Partially checked item**:
 In checkbox mode, a parent with some, but not all, of its descendants checked.
 _Avoid_: Mixed item, half-selected, indeterminate item
+
+**Top-most checked item**:
+A checked item whose parent is not checked; the value of the tree in checkbox mode is its top-most checked items.
+_Avoid_: Root of the selection, checked branch

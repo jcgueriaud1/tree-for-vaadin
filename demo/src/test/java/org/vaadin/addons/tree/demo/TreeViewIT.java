@@ -666,6 +666,39 @@ class TreeViewIT {
     }
 
     @Test
+    void checkingACategoryChecksItsProductsAndTheValueIsTheCategory() {
+        Locator games = item(products(), "Games");
+
+        games.click();
+
+        assertThat(games).hasAttribute("aria-checked", "true");
+        assertThat(productsStatus()).hasText("Checked: Games");
+        games.locator("[part=toggle]").click();
+        assertThat(item(products(), "Games item 1")).hasAttribute("aria-checked", "true");
+        assertThat(products()).hasAttribute("aria-multiselectable", "true");
+        assertThat(games).not().hasAttribute("aria-selected", "true");
+    }
+
+    @Test
+    void uncheckingAProductOfACheckedCategoryLeavesItPartiallyChecked() {
+        Locator books = item(products(), "Books");
+        books.click();
+        books.locator("[part=toggle]").click();
+
+        // Space toggles the focused item, as a click does
+        item(products(), "Books item 2").click();
+        assertThat(item(products(), "Books item 2")).hasAttribute("aria-checked", "false");
+        assertThat(books).hasAttribute("aria-checked", "mixed");
+        assertThat(item(products(), "Books item 1")).hasAttribute("aria-checked", "true");
+        assertThat(productsStatus()).hasText("Checked: 999 items: Books item 1, Books item 3, Books item 4, …");
+        assertNoAccessibilityViolations(page);
+
+        page.keyboard().press("Space");
+        assertThat(books).hasAttribute("aria-checked", "true");
+        assertThat(productsStatus()).hasText("Checked: Books");
+    }
+
+    @Test
     void theTextsTheTreeShowsByItselfCanBeTranslated() {
         page.getByRole(AriaRole.BUTTON, new Page.GetByRoleOptions().setName("Remove all projects")).click();
         assertThat(projects().getByText("No items")).isVisible();
@@ -822,6 +855,14 @@ class TreeViewIT {
         return page.locator("section").filter(new Locator.FilterOptions().setHas(
                 page.getByRole(AriaRole.TREE, new Page.GetByRoleOptions().setName("Catalogue"))))
                 .getByRole(AriaRole.STATUS);
+    }
+
+    private Locator products() {
+        return page.getByRole(AriaRole.TREE, new Page.GetByRoleOptions().setName("Products"));
+    }
+
+    private Locator productsStatus() {
+        return page.locator("section").filter(new Locator.FilterOptions().setHas(products())).getByRole(AriaRole.STATUS);
     }
 
     private Locator checkbox(String label) {

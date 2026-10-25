@@ -8,6 +8,7 @@ import java.util.HashSet;
 import java.util.List;
 import java.util.Objects;
 import java.util.Set;
+import java.util.function.Consumer;
 import java.util.stream.Stream;
 
 import com.vaadin.flow.component.AbstractField.ComponentValueChangeEvent;
@@ -35,6 +36,8 @@ import com.vaadin.flow.data.provider.hierarchy.HierarchicalQuery;
 import com.vaadin.flow.data.provider.hierarchy.TreeData;
 import com.vaadin.flow.data.provider.hierarchy.TreeDataProvider;
 import com.vaadin.flow.data.selection.MultiSelect;
+import com.vaadin.flow.data.selection.MultiSelectionEvent;
+import com.vaadin.flow.data.selection.MultiSelectionListener;
 import com.vaadin.flow.data.selection.SingleSelect;
 import com.vaadin.flow.dom.DisabledUpdateMode;
 import com.vaadin.flow.dom.Element;
@@ -55,7 +58,9 @@ import com.vaadin.flow.shared.Registration;
  * The user selects an item by clicking it; the selected item is the value of
  * {@link #asSingleSelect()}. The ancestors of the selected item are marked as
  * its selection path, if the data provider implements
- * {@link HierarchicalDataProvider#getParent(Object) getParent}.
+ * {@link HierarchicalDataProvider#getParent(Object) getParent}. In
+ * {@link SelectionMode#CHECKBOX} mode, the user checks items instead, and the
+ * top-most checked items are the value of {@link #asMultiSelect()}.
  * <p>
  * Each item can show an icon in front of its label, and a tooltip, from
  * {@link #setItemIconGenerator} and {@link #setItemTooltipGenerator}. Items
@@ -101,18 +106,27 @@ public class Tree<T> extends Component
     /** How the user selects items. */
     public enum SelectionMode {
         /** The user selects one item at a time, the value of {@link Tree#asSingleSelect()}. */
-        SINGLE
+        SINGLE,
+        /**
+         * The user checks items with checkboxes: checking an item checks its
+         * descendants. The top-most checked items are the value of
+         * {@link Tree#asMultiSelect()}.
+         */
+        CHECKBOX
     }
 
     /**
      * An item as the browser sees it: the key it refers to it by, its label,
      * its icon and tooltip if any, whether it has child items, whether it is
      * expanded, whether it is the selected item, whether it is on the
-     * selection path, whether it is disabled and whether the user can edit its
-     * label.
+     * selection path, whether it is disabled, whether the user can edit its
+     * label, and in checkbox selection mode whether it is checked:
+     * {@code "true"}, {@code "false"} or {@code "mixed"}, or {@code null} in
+     * single selection mode.
      */
     record TreeItem(String key, String label, String icon, String tooltip, boolean expandable, boolean expanded,
-            boolean selected, boolean onSelectionPath, boolean disabled, boolean editable) implements Serializable {
+            boolean selected, boolean onSelectionPath, boolean disabled, boolean editable, String checked)
+            implements Serializable {
     }
 
     /** A page of child items, with the number of children the parent has in all. */
@@ -136,6 +150,28 @@ public class Tree<T> extends Component
     /** The ancestors of the selected item, and their ids. */
     private List<T> selectionPath = List.of();
     private Set<Object> selectionPathIds = Set.of();
+    private final MultiSelect<Tree<T>, T> multiSelect = new TreeMultiSelect();
+    private final CheckedItems<T> checkedItems = new CheckedItems<>(new CheckedItems.Hierarchy<>() {
+        @Override
+        public List<T> ancestors(T item) {
+            return Tree.this.ancestors(item);
+        }
+
+        @Override
+        public int childCount(T parent) {
+            return Tree.this.childCount(dataProvider, parent);
+        }
+
+        @Override
+        public Stream<T> children(T parent) {
+            return Tree.this.children(parent);
+        }
+
+        @Override
+        public Object id(T item) {
+            return dataProvider.getId(item);
+        }
+    });
     private TreeI18n i18n = new TreeI18n();
 
     /** Creates an empty tree. */
@@ -165,6 +201,7 @@ public class Tree<T> extends Component
         keyMapper.setIdentifierGetter(dataProvider::getId);
         expandedIds.clear();
         setSelectedItem(null, false);
+        changeCheckedItems(CheckedItems::clear, false);
         if (isAttached()) {
             listenToDataProvider();
         }
@@ -536,14 +573,26 @@ public class Tree<T> extends Component
     }
 
     /**
-     * Sets how the user selects items. {@link SelectionMode#SINGLE} is the only
-     * mode for now, and the default.
+     * Sets how the user selects items: one at a time, the default, or by
+     * checking them. Changing the mode clears the selection.
      *
      * @param selectionMode
      *            the selection mode, not {@code null}
      */
     public void setSelectionMode(SelectionMode selectionMode) {
-        this.selectionMode = Objects.requireNonNull(selectionMode, "selectionMode");
+        Objects.requireNonNull(selectionMode, "selectionMode");
+        if (selectionMode == this.selectionMode) {
+            return;
+        }
+        setSelectedItem(null, false);
+        changeCheckedItems(CheckedItems::clear, false);
+        this.selectionMode = selectionMode;
+        if (selectionMode == SelectionMode.CHECKBOX) {
+            getElement().setAttribute("aria-multiselectable", "true");
+        } else {
+            getElement().removeAttribute("aria-multiselectable");
+        }
+        refresh();
     }
 
     /**
@@ -577,15 +626,58 @@ public class Tree<T> extends Component
     }
 
     /**
-     * Gets the selection of the tree as a set of items, in a selection mode
-     * where several items can be selected. There is no such mode yet.
+     * Gets the checked items of the tree, in {@link SelectionMode#CHECKBOX}
+     * mode: the top-most checked items (ADR-0002). Checking an item checks its
+     * descendants without listing them, and checking every child item of a
+     * parent checks the parent instead; {@link #isChecked} tells whether any
+     * item is checked. Unchecking an item under a checked ancestor checks its
+     * siblings instead, fetching the child items on the way down to it.
+     * <p>
+     * The user checks and unchecks an item by clicking it, or with Space or
+     * Enter; a partially checked item, with some checked descendants, is
+     * checked as a whole. Checking needs the data provider to implement
+     * {@link HierarchicalDataProvider#getParent(Object) getParent}.
      *
-     * @return never returns
+     * @return the checked items as a value, never {@code null}
      * @throws IllegalStateException
-     *             always, as the selection mode is {@link SelectionMode#SINGLE}
+     *             if the selection mode is not {@link SelectionMode#CHECKBOX}
      */
     public MultiSelect<Tree<T>, T> asMultiSelect() {
-        throw new IllegalStateException("The tree is not in a multiple selection mode: " + selectionMode);
+        if (selectionMode != SelectionMode.CHECKBOX) {
+            throw new IllegalStateException("The tree is not in checkbox selection mode: " + selectionMode);
+        }
+        return multiSelect;
+    }
+
+    /**
+     * Tells whether an item is checked, by itself or by a checked ancestor, in
+     * {@link SelectionMode#CHECKBOX} mode.
+     *
+     * @param item
+     *            the item, not {@code null}
+     * @return {@code true} if the item is checked; always {@code false} in
+     *         single selection mode
+     * @throws UnsupportedOperationException
+     *             if the data provider does not implement
+     *             {@link HierarchicalDataProvider#getParent(Object) getParent}
+     */
+    public boolean isChecked(T item) {
+        return selectionMode == SelectionMode.CHECKBOX && checkedItems.isChecked(Objects.requireNonNull(item, "item"));
+    }
+
+    /**
+     * Tells whether an item is partially checked, in
+     * {@link SelectionMode#CHECKBOX} mode: not checked, with some checked
+     * descendants.
+     *
+     * @param item
+     *            the item, not {@code null}
+     * @return {@code true} if the item is partially checked; always
+     *         {@code false} in single selection mode
+     */
+    public boolean isPartiallyChecked(T item) {
+        return selectionMode == SelectionMode.CHECKBOX
+                && checkedItems.isPartiallyChecked(Objects.requireNonNull(item, "item"));
     }
 
     /**
@@ -703,6 +795,63 @@ public class Tree<T> extends Component
     }
 
     /**
+     * Changes the checked items, then fires a value change if the value
+     * changed, and tells the browser the state of the items it has.
+     */
+    private void changeCheckedItems(Consumer<CheckedItems<T>> change, boolean fromClient) {
+        Set<T> oldValue = checkedItems.items();
+        change.accept(checkedItems);
+        if (!oldValue.equals(checkedItems.items())) {
+            fireEvent(new MultiSelectionEvent<>(this, multiSelect, oldValue, fromClient));
+        }
+        if (selectionMode == SelectionMode.CHECKBOX) {
+            sendCheckedItems();
+        }
+    }
+
+    /**
+     * Tells the browser the top-most checked items and the partially checked
+     * ones, by the keys of those it has; it checks the descendants of a checked
+     * item itself, and learns of the others as it fetches them.
+     */
+    private void sendCheckedItems() {
+        ArrayList<String> checkedKeys = new ArrayList<>(
+                checkedItems.items().stream().filter(keyMapper::has).map(keyMapper::key).toList());
+        ArrayList<String> partialKeys = new ArrayList<>(
+                checkedItems.partiallyChecked().stream().filter(keyMapper::has).map(keyMapper::key).toList());
+        getElement().callJsFunction("setChecked", checkedKeys, partialKeys);
+    }
+
+    /**
+     * Checks or unchecks an item, as the user did in the browser. A disabled
+     * item, or any while read-only, is left as it is, and the browser told so.
+     *
+     * @param key
+     *            the key of the item; an item no longer known is ignored
+     * @param checked
+     *            {@code true} to check the item and its descendants,
+     *            {@code false} to uncheck them
+     */
+    @ClientCallable
+    void setChecked(String key, boolean checked) {
+        T item = keyMapper.get(key);
+        if (item == null || selectionMode != SelectionMode.CHECKBOX) {
+            return;
+        }
+        if (multiSelect.isReadOnly() || !itemEnabledProvider.test(item)) {
+            sendCheckedItems();
+        } else {
+            changeCheckedItems(items -> {
+                if (checked) {
+                    items.check(item);
+                } else {
+                    items.uncheck(item);
+                }
+            }, true);
+        }
+    }
+
+    /**
      * Renames an item, as the user did in the browser: fires an
      * {@link EditEvent} if the user can edit the item, then sends the item
      * back, with the label the app gives it, in place of the one the browser
@@ -800,19 +949,36 @@ public class Tree<T> extends Component
 
     private <F> ItemPage fetchChildren(HierarchicalDataProvider<T, F> provider, T parent, int offset, int limit) {
         int size = childCount(provider, parent);
+        // The child items of a checked item are checked: no need to walk up from each of them
+        boolean parentChecked = parent != null && isChecked(parent);
         List<TreeItem> items = provider
                 .fetchChildren(new HierarchicalQuery<>(offset, limit, List.of(), null, null, parent))
-                .map(this::treeItem)
+                .map(item -> treeItem(item, parentChecked))
                 .toList();
         return new ItemPage(items, size);
     }
 
     private TreeItem treeItem(T item) {
+        return treeItem(item, selectionMode == SelectionMode.CHECKBOX
+                && ancestorChecked(item));
+    }
+
+    /** Whether an ancestor of the item is checked. */
+    private boolean ancestorChecked(T item) {
+        return ancestors(item).stream().anyMatch(checkedItems::isTop);
+    }
+
+    private TreeItem treeItem(T item, boolean parentChecked) {
         Object id = dataProvider.getId(item);
+        String checked = null;
+        if (selectionMode == SelectionMode.CHECKBOX) {
+            checked = checkedItems.isChecked(item, parentChecked) ? "true"
+                    : checkedItems.isPartiallyChecked(item) ? "mixed" : "false";
+        }
         return new TreeItem(keyMapper.key(item), itemLabelGenerator.apply(item), itemIconGenerator.apply(item),
                 itemTooltipGenerator.apply(item), hasChildren(item), isExpanded(item),
                 Objects.equals(id, idOf(selectedItem)), selectionPathIds.contains(id), !itemEnabledProvider.test(item),
-                itemEditableProvider.test(item));
+                itemEditableProvider.test(item), checked);
     }
 
     /**
@@ -879,8 +1045,59 @@ public class Tree<T> extends Component
         public Registration addValueChangeListener(
                 ValueChangeListener<? super ComponentValueChangeEvent<Tree<T>, T>> listener) {
             Objects.requireNonNull(listener, "listener");
-            return addListener(ComponentValueChangeEvent.class,
-                    (ComponentEventListener) event -> listener.valueChanged((ComponentValueChangeEvent<Tree<T>, T>) event));
+            // Only the changes of this value, not those of the checked items
+            return addListener(ComponentValueChangeEvent.class, (ComponentEventListener) event -> {
+                if (((ComponentValueChangeEvent<?, ?>) event).getHasValue() == this) {
+                    listener.valueChanged((ComponentValueChangeEvent<Tree<T>, T>) event);
+                }
+            });
+        }
+
+        @Override
+        public Element getElement() {
+            return Tree.this.getElement();
+        }
+    }
+
+    /** The checked items of the tree as a value, see {@link Tree#asMultiSelect()}. */
+    private class TreeMultiSelect implements MultiSelect<Tree<T>, T> {
+
+        @Override
+        public void updateSelection(Set<T> addedItems, Set<T> removedItems) {
+            Objects.requireNonNull(addedItems, "addedItems");
+            Objects.requireNonNull(removedItems, "removedItems");
+            changeCheckedItems(items -> {
+                removedItems.forEach(items::uncheck);
+                addedItems.forEach(items::check);
+            }, false);
+        }
+
+        @Override
+        public Set<T> getSelectedItems() {
+            return checkedItems.items();
+        }
+
+        /** Whether the item is checked, by itself or by a checked ancestor. */
+        @Override
+        public boolean isSelected(T item) {
+            return isChecked(item);
+        }
+
+        @Override
+        @SuppressWarnings({ "unchecked", "rawtypes" })
+        public Registration addSelectionListener(MultiSelectionListener<Tree<T>, T> listener) {
+            Objects.requireNonNull(listener, "listener");
+            return addListener(MultiSelectionEvent.class,
+                    (ComponentEventListener) event -> listener.selectionChange((MultiSelectionEvent<Tree<T>, T>) event));
+        }
+
+        @Override
+        @SuppressWarnings({ "unchecked", "rawtypes" })
+        public Registration addValueChangeListener(
+                ValueChangeListener<? super ComponentValueChangeEvent<Tree<T>, Set<T>>> listener) {
+            Objects.requireNonNull(listener, "listener");
+            return addListener(MultiSelectionEvent.class, (ComponentEventListener) event -> listener
+                    .valueChanged((ComponentValueChangeEvent<Tree<T>, Set<T>>) event));
         }
 
         @Override
