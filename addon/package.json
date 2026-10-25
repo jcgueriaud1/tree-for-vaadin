@@ -11,6 +11,7 @@
   "devDependencies": {
     "@open-wc/testing": "5.0.0",
     "@types/mocha": "10.0.10",
+    "@vaadin/icon": "25.3.3",
     "@vaadin/tooltip": "25.3.3",
     "@web/dev-server-esbuild": "2.0.0",
     "@web/test-runner": "1.0.0",

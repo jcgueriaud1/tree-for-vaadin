@@ -1,5 +1,6 @@
 import { expect, fixture, html, nextFrame, waitUntil } from '@open-wc/testing';
 import { resetMouse, sendKeys, sendMouse } from '@web/test-runner-commands';
+import { Iconset } from '@vaadin/icon/src/vaadin-iconset.js';
 import { Tooltip } from '@vaadin/tooltip/src/vaadin-tooltip.js';
 import {
   DEFAULT_I18N,
@@ -1514,15 +1515,92 @@ describe('tfv-tree', () => {
       Tooltip.setDefaultHideDelay(-1);
     });
 
-    it('shows the icon of an item before its label, hidden from assistive technology', async () => {
-      const tree = await treeWith(folderServer());
+    /** The symbol an item's icon shows, from the tree's shadow root. */
+    function symbolOf(tree: TfvTree, label: string): SVGSymbolElement | null {
+      const href = item(tree, label).querySelector('[part="icon"] use')!.getAttribute('href')!;
+      return tree.shadowRoot!.querySelector<SVGSymbolElement>(`symbol${href}`);
+    }
+
+    before(() => {
+      const template = document.createElement('template');
+      template.innerHTML = `<svg><defs>
+        <g id="test:folder"><path d="M0 2h6l2 2h8v10H0z"></path></g>
+        <g id="test:music"><path d="M4 2h10v10H4z"></path></g>
+        <svg id="test:wide" viewBox="0 0 32 16" preserveAspectRatio="xMinYMid meet"><path d="M0 0h32v16H0z"></path></svg>
+      </defs></svg>`;
+      Iconset.register('test', 16, template);
+    });
+
+    it('shows the icon of an item before its label as an SVG, hidden from assistive technology', async () => {
+      const server = folderServer();
+      server.icons = { Documents: 'test:folder' };
+      const tree = await treeWith(server);
+
+      const icon = item(tree, 'Documents').querySelector('[part="icon"]')!;
+      expect(icon.localName).to.equal('svg');
+      expect(icon.getAttribute('aria-hidden')).to.equal('true');
+      expect(icon.nextElementSibling!.getAttribute('part')).to.equal('label');
+      const symbol = symbolOf(tree, 'Documents')!;
+      expect(symbol.getAttribute('viewBox')).to.equal('0 0 16 16', 'the size of the icon set');
+      expect(symbol.querySelector('path')!.getAttribute('d')).to.equal('M0 2h6l2 2h8v10H0z');
+      expect(labels(tree)).to.deep.equal(['Documents', 'Music', 'Pictures'], 'the label stays the only text');
+    });
+
+    it('keeps the view box and aspect ratio of an icon that has its own', async () => {
+      const server = folderServer();
+      server.icons = { Documents: 'test:wide' };
+      const tree = await treeWith(server);
+
+      const symbol = symbolOf(tree, 'Documents')!;
+      expect(symbol.getAttribute('viewBox')).to.equal('0 0 32 16');
+      expect(symbol.getAttribute('preserveAspectRatio')).to.equal('xMinYMid meet');
+    });
+
+    it('draws each icon once, however many items show it', async () => {
+      const server = folderServer();
+      server.icons = { Documents: 'test:folder', Music: 'test:music', Pictures: 'test:folder' };
+      const tree = await treeWith(server);
+
+      expect(symbolOf(tree, 'Documents')).to.equal(symbolOf(tree, 'Pictures'));
+      expect(symbolOf(tree, 'Documents')).not.to.equal(symbolOf(tree, 'Music'));
+      expect(tree.shadowRoot!.querySelectorAll('symbol').length).to.equal(2);
+    });
+
+    it('sizes the icon and colors it like the text of its item', async () => {
+      const server = folderServer();
+      server.icons = { Documents: 'test:folder' };
+      const tree = await treeWith(server, (tree) => {
+        tree.style.setProperty('--tfv-tree-icon-size', '20px');
+        tree.style.setProperty('--tfv-tree-icon-color', 'rgb(255, 0, 0)');
+      });
+
+      const icon = item(tree, 'Documents').querySelector<SVGSVGElement>('[part="icon"]')!;
+      const { width, height } = icon.getBoundingClientRect();
+      expect([width, height]).to.deep.equal([20, 20]);
+      expect(getComputedStyle(icon).fill).to.equal('rgb(255, 0, 0)');
+    });
+
+    it('shows an icon whose icon set is not loaded yet with a vaadin-icon, which shows it once loaded', async () => {
+      const server = folderServer();
+      server.icons = { Documents: 'later:folder' };
+      const tree = await treeWith(server);
 
       const icon = item(tree, 'Documents').querySelector('[part="icon"]')!;
       expect(icon.localName).to.equal('vaadin-icon');
-      expect(icon.getAttribute('icon')).to.equal('vaadin:folder');
+      expect(icon.getAttribute('icon')).to.equal('later:folder');
       expect(icon.getAttribute('aria-hidden')).to.equal('true');
-      expect(icon.nextElementSibling!.getAttribute('part')).to.equal('label');
-      expect(labels(tree)).to.deep.equal(['Documents', 'Music', 'Pictures'], 'the label stays the only text');
+    });
+
+    it('shows every icon with a vaadin-icon in the vaadin-icon mode', async () => {
+      const server = folderServer();
+      server.icons = { Documents: 'test:folder' };
+      const tree = await treeWith(server, (tree) => (tree.itemIconMode = 'vaadin-icon'));
+
+      const icon = item(tree, 'Documents').querySelector('[part="icon"]')!;
+      expect(icon.localName).to.equal('vaadin-icon');
+      expect(icon.getAttribute('icon')).to.equal('test:folder');
+      expect(icon.getAttribute('aria-hidden')).to.equal('true');
+      expect(tree.shadowRoot!.querySelectorAll('symbol').length).to.equal(0);
     });
 
     it('shows no icon for an item without one', async () => {

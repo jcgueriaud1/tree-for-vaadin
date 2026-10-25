@@ -15,6 +15,7 @@ import com.vaadin.flow.component.html.Main;
 import com.vaadin.flow.component.html.OrderedList;
 import com.vaadin.flow.component.html.Paragraph;
 import com.vaadin.flow.component.html.Section;
+import com.vaadin.flow.component.radiobutton.RadioButtonGroup;
 import com.vaadin.flow.component.textfield.IntegerField;
 import com.vaadin.flow.router.PageTitle;
 import com.vaadin.flow.router.Route;
@@ -75,14 +76,19 @@ public class PerformanceView extends Main {
             });
             """;
 
+    private static final String NO_ICONS = "None";
+    private static final String SVG_ICONS = "SVG (default)";
+    private static final String VAADIN_ICONS = "vaadin-icon";
+
     private final IntegerField rootCount = sizeField("Root items", 100);
     private final IntegerField childCount = sizeField("Child items per item", 10);
     private final IntegerField levels = sizeField("Levels", 3);
     private final IntegerField pageSize = sizeField("Page size", 50);
     private final Paragraph size = new Paragraph();
     private final Checkbox checkboxes = new Checkbox("Checkboxes");
-    /** Each icon is a vaadin-icon of its own, which costs: see the difference. */
-    private final Checkbox icons = new Checkbox("Icons", true);
+    /** No icons, or icons shown as an item icon mode does: see the difference. */
+    private final RadioButtonGroup<String> icons = new RadioButtonGroup<>("Icons", NO_ICONS, SVG_ICONS,
+            VAADIN_ICONS);
     private final OrderedList results = new OrderedList();
     private final Div treeHolder = new Div();
     private Tree<GeneratedDataProvider.Item> tree;
@@ -118,6 +124,7 @@ public class PerformanceView extends Main {
             return timed(() -> tree.asMultiSelect().select(provider.rootItems().toList()));
         });
         checkboxes.addValueChangeListener(event -> buildTree());
+        icons.setValue(SVG_ICONS);
         icons.addValueChangeListener(event -> buildTree());
 
         // A live region announcing each result; on a div, as a list cannot have the role
@@ -174,8 +181,11 @@ public class PerformanceView extends Main {
         tree.setHeight("25em");
         tree.setPageSize(valueOf(pageSize));
         tree.setItemLabelGenerator(GeneratedDataProvider.Item::name);
-        if (icons.getValue()) {
+        if (!NO_ICONS.equals(icons.getValue())) {
             tree.setItemIconGenerator(item -> provider.hasChildren(item) ? "vaadin:folder" : "vaadin:file");
+        }
+        if (VAADIN_ICONS.equals(icons.getValue())) {
+            tree.setItemIconMode(Tree.ItemIconMode.VAADIN_ICON);
         }
         if (checkboxes.getValue()) {
             tree.setSelectionMode(Tree.SelectionMode.CHECKBOX);

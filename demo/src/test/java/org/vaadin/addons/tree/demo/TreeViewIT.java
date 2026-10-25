@@ -430,18 +430,26 @@ class TreeViewIT {
     @Test
     void itemsShowADecorativeIconBeforeTheirLabel() {
         Locator documents = item(folders(), "Documents");
-        Locator icon = documents.locator("vaadin-icon[part=icon]");
+        Locator icon = documents.locator("svg[part=icon]");
 
-        assertThat(icon).hasAttribute("icon", "vaadin:folder");
         assertThat(icon).hasAttribute("aria-hidden", "true");
-        assertThat(icon.locator("svg path")).not().hasCount(0);
+        assertThat(icon).isVisible();
+        assertTrue((Boolean) icon.evaluate("""
+                icon => {
+                  const symbol = icon.getRootNode().querySelector(icon.querySelector('use').getAttribute('href'));
+                  const box = icon.querySelector('use').getBBox();
+                  return symbol.querySelector('path') !== null && box.width > 0 && box.height > 0;
+                }"""), "the icon is drawn from its symbol");
         assertThat(documents).hasAccessibleName("Documents");
 
         Locator catalogue = page.getByRole(AriaRole.TREE, new Page.GetByRoleOptions().setName("Catalogue"));
         Locator books = item(catalogue, "Books");
-        assertThat(books.locator("[part=icon]")).hasAttribute("icon", "vaadin:folder");
         books.locator("[part=toggle]").click();
-        assertThat(item(catalogue, "Books item 1").locator("[part=icon]")).hasAttribute("icon", "vaadin:file");
+        String folder = books.locator("[part=icon] use").getAttribute("href");
+        String file = item(catalogue, "Books item 1").locator("[part=icon] use").getAttribute("href");
+        assertNotEquals(folder, file, "a folder and a file show different icons");
+        assertEquals(folder, item(catalogue, "Games").locator("[part=icon] use").getAttribute("href"),
+                "folders share one symbol");
     }
 
     @Test

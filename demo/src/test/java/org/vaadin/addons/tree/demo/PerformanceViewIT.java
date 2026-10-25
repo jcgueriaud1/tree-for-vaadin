@@ -74,6 +74,18 @@ class PerformanceViewIT {
     }
 
     @Test
+    void theIconsAreSvgUnlessAnotherWayIsChosen() {
+        Locator firstIcon = tree().getByRole(AriaRole.TREEITEM).first().locator("[part=icon]");
+        assertThat(firstIcon).hasJSProperty("localName", "svg");
+
+        page.getByLabel("vaadin-icon").check();
+        assertThat(firstIcon).hasJSProperty("localName", "vaadin-icon");
+
+        page.getByLabel("None").check();
+        assertThat(firstIcon).hasCount(0);
+    }
+
+    @Test
     void expandingAllRefusesTreesTooLargeForTheDemo() {
         page.getByLabel("Root items").fill("1000");
         page.getByLabel("Levels").fill("4");
