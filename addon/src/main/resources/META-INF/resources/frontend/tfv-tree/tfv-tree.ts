@@ -1432,23 +1432,22 @@ export class TfvTree extends LitElement {
 
   /**
    * Ctrl+X (or Cmd+X) cuts the focused item, saying how to move it; Ctrl+V pastes it
-   * into the focused item, Ctrl+Shift+V before it. Tells whether the key was one of these.
+   * into the focused item, Ctrl+Shift+V before it. Tells whether it handled the key:
+   * not when there is nothing to cut or paste, so that the page can have it.
    */
   private _onCutOrPaste(event: KeyboardEvent, node: Node): boolean {
     if (!(event.ctrlKey || event.metaKey) || event.altKey) {
       return false;
     }
     const key = event.key.toLowerCase();
-    if (key === 'x' && !event.shiftKey) {
-      if (this._canDrag(node)) {
-        this._cutKey = node.item.key;
-        announce(this.i18n.cut.replace('{0}', node.item.label));
-      }
+    if (key === 'x' && !event.shiftKey && this._canDrag(node)) {
+      this._cutKey = node.item.key;
+      announce(this.i18n.cut.replace('{0}', node.item.label));
       return true;
     }
-    if (key === 'v') {
-      const cut = this._cutKey === null ? undefined : this._nodes.get(this._cutKey);
-      if (cut && this._canDrag(cut) && this._canDrop(cut, node)) {
+    const cut = this._cutKey === null ? undefined : this._nodes.get(this._cutKey);
+    if (key === 'v' && cut) {
+      if (this._canDrag(cut) && this._canDrop(cut, node)) {
         this.$server?.drop(cut.item.key, node.item.key, event.shiftKey ? 'BEFORE' : 'INTO');
         this._cutKey = null;
       }

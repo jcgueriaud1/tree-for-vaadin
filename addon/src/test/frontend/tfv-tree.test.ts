@@ -1140,12 +1140,16 @@ describe('tfv-tree', () => {
       expect(server.drops).to.be.empty;
     });
 
-    it('does not cut an item that cannot be dragged', async () => {
+    it('leaves Ctrl+X and Ctrl+V alone when there is nothing to cut or paste', async () => {
       const server = serverWith(FOLDERS);
       const tree = await treeWith(server);
       item(tree, 'Music').focus();
 
-      await sendKeys({ press: 'Control+x' });
+      for (const key of ['x', 'v']) {
+        const event = new KeyboardEvent('keydown', { key, ctrlKey: true, bubbles: true, composed: true, cancelable: true });
+        item(tree, 'Music').dispatchEvent(event);
+        expect(event.defaultPrevented, key).to.be.false;
+      }
       await tree.updateComplete;
 
       expect(dropState(tree, 'Music')).to.be.empty;
