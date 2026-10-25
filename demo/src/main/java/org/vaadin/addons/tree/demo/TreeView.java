@@ -27,6 +27,7 @@ import com.vaadin.flow.data.value.ValueChangeMode;
 import com.vaadin.flow.function.SerializablePredicate;
 import com.vaadin.flow.router.PageTitle;
 import com.vaadin.flow.router.Route;
+import com.vaadin.flow.router.RouterLink;
 import org.vaadin.addons.tree.DropLocation;
 import org.vaadin.addons.tree.Tree;
 import org.vaadin.addons.tree.TreeContextMenu;
@@ -100,7 +101,8 @@ public class TreeView extends Main {
     public TreeView() {
         // Room on the sides on a phone, and lines short enough to read on a wide screen
         getStyle().set("display", "block").set("padding", "0 1rem 1rem").set("max-width", "60rem");
-        add(new H1("Tree for Vaadin"), new ThemeSwitcher(), folders(), catalogue(), products(), projects(), shortcut());
+        add(new H1("Tree for Vaadin"), new RouterLink("Performance tests", PerformanceView.class), new ThemeSwitcher(),
+                folders(), catalogue(), products(), projects(), shortcut());
     }
 
     /** A tree as wide as the demo's trees, narrower on a narrow screen. */

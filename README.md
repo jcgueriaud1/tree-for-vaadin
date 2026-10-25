@@ -489,6 +489,11 @@ selected item takes the system's `Highlight` colors.
 
   `-DskipITs` skips the demo tests; `-DskipTests` skips all of them.
 - Lit tests alone: `cd addon && npm ci && npm test`
+- Performance: the demo's `/performance` page builds a tree of any size from a generated backend, and times
+  expanding everything, scrolling to the last item, collapsing and checking, from the click until the tree has
+  fetched and rendered, with the server's share and the items in the page. For numbers worth comparing, run the
+  packaged demo, which is a production build (`./mvnw -DskipTests package`, then
+  `java -jar demo/target/tree-for-vaadin-demo.jar`), or its Docker image, rather than `./mvnw`'s development mode.
 
 The Lit element (`addon/src/main/resources/META-INF/resources/frontend/tfv-tree/`) ships inside the jar and is
 loaded with `@JsModule`. `addon/package.json` only holds test tooling: at run time Lit, `<vaadin-icon>`, `<vaadin-tooltip>` and Vaadin's live region (`@vaadin/a11y-base`) come from the Vaadin app.
