@@ -1899,6 +1899,24 @@ describe('tfv-tree', () => {
       expect(getComputedStyle(item(tree, 'Pictures')).color).to.not.equal('rgb(1, 2, 3)');
     });
 
+    it('skips the rendering of the items out of view, guessing their height right', async () => {
+      const labels = Array.from({ length: 40 }, (_, i) => `Folder ${i + 1}`);
+      const tree = await treeWith(serverWith(labels), (element) => (element.style.height = '60px'));
+      const first = item(tree, 'Folder 1');
+      const last = item(tree, 'Folder 40');
+      // The browser tells the items out of view when it next renders
+      await nextFrame();
+      await nextFrame();
+
+      expect(getComputedStyle(last).contentVisibility).to.equal('auto');
+      // What the browser skips is the item's contents
+      expect(last.querySelector('[part="label"]')!.checkVisibility({ contentVisibilityAuto: true }), 'skipped').to.be
+        .false;
+      expect(first.querySelector('[part="label"]')!.checkVisibility({ contentVisibilityAuto: true })).to.be.true;
+      // Or the items would jump as they come into view
+      expect(last.getBoundingClientRect().height).to.be.closeTo(first.getBoundingClientRect().height, 0.5);
+    });
+
     it('lays the parts out from its --tfv-tree-* properties', async () => {
       const server = serverWith([['Documents', ['Invoices', 'Letters'], true], 'Music']);
       server.selectedKey = '1';
