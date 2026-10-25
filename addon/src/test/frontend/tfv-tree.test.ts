@@ -1815,6 +1815,38 @@ describe('tfv-tree', () => {
       expect(focusedLabel(tree)).to.equal('Documents');
     });
 
+    it('collapses an item the server refreshes as collapsed, keeping its child items for later', async () => {
+      const server = serverWith(FOLDERS);
+      const tree = await treeWith(server);
+      await clickToggle(tree, 'Documents');
+      server.calls = [];
+
+      tree.refreshItem({ ...(await server.fetchChildren(null, 0, 1)).items[0], expanded: false }, false);
+      await tree.updateComplete;
+      expect(labels(tree)).to.deep.equal(['Documents', 'Music', 'Pictures']);
+
+      await clickToggle(tree, 'Documents');
+      expect(labels(tree)).to.deep.equal(['Documents', 'Invoices', 'Letters', 'Music', 'Pictures']);
+      expect(server.calls).to.deep.equal([[null, 0, 1]], 'no fetch but the one above');
+    });
+
+    it('drops the items shown as soon as the server refreshes the tree, while fetching them again', async () => {
+      const server = serverWith(FOLDERS);
+      const tree = await treeWith(server);
+      server.hold = true;
+
+      const refreshed = tree.refresh();
+      await tree.updateComplete;
+      expect(labels(tree)).to.deep.equal([]);
+      expect(loadingRows(tree).length).to.equal(1);
+
+      server.hold = false;
+      server.release();
+      await refreshed;
+      await settle(tree);
+      expect(labels(tree)).to.deep.equal(['Documents', 'Music', 'Pictures']);
+    });
+
     it('collapses an item the server refreshes once it has no child items', async () => {
       const documents: FakeItem = ['Documents', ['Invoices'], true];
       const server = serverWith([documents]);
