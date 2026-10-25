@@ -7,6 +7,7 @@ import java.util.Collection;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Objects;
+import java.util.Optional;
 import java.util.Set;
 import java.util.function.Consumer;
 import java.util.stream.Stream;
@@ -145,6 +146,8 @@ public class Tree<T> extends Component
     private SerializablePredicate<T> itemEditableProvider = item -> false;
     private SerializablePredicate<T> itemDraggableProvider = item -> false;
     private SerializablePredicate<T> itemDroppableProvider = item -> true;
+    /** The item cut to be moved, with Ctrl+X or {@link #cutItem}, if any. */
+    private T cutItem;
     private Registration dataProviderListener;
     /** The ids of the expanded items, kept across refreshes. */
     private final Set<Object> expandedIds = new HashSet<>();
@@ -406,6 +409,97 @@ public class Tree<T> extends Component
      */
     public SerializablePredicate<T> getItemDroppableProvider() {
         return itemDroppableProvider;
+    }
+
+    /**
+     * Cuts an item, to be moved with {@link #pasteInto}, {@link #pasteBefore}
+     * or {@link #pasteAfter}, as Ctrl+X does: from a context menu, which is how
+     * the user moves items on a touch screen, without drag and drop nor
+     * Ctrl+X. The item shows cut, and assistive technology is told. Only an
+     * item the user can move is cut; the item cut before, if any, no longer is.
+     *
+     * @param item
+     *            the item, not {@code null}
+     * @see #setItemDraggableProvider
+     */
+    public void cutItem(T item) {
+        Objects.requireNonNull(item, "item");
+        if (canMove(item)) {
+            cutItem = item;
+            sendCutItem();
+        }
+    }
+
+    /**
+     * Gets the item cut to be moved, with Ctrl+X or {@link #cutItem}: to offer
+     * pasting it, in a context menu for instance.
+     *
+     * @return the cut item, or empty if none is
+     */
+    public Optional<T> getCutItem() {
+        return Optional.ofNullable(cutItem);
+    }
+
+    /** Leaves the cut item where it is, as Escape does. */
+    public void cancelCut() {
+        if (cutItem != null) {
+            cutItem = null;
+            sendCutItem();
+        }
+    }
+
+    /**
+     * Moves the cut item into an item, as Ctrl+V does: fires a
+     * {@link DropEvent} for the app to move it, if it can go there, and the
+     * item is no longer cut.
+     *
+     * @param target
+     *            the item to move it into, not {@code null}
+     * @return {@code true} if an item was cut and dropped, {@code false} if
+     *         none is cut or it cannot go there, and stays cut
+     */
+    public boolean pasteInto(T target) {
+        return paste(target, DropLocation.INTO);
+    }
+
+    /**
+     * Moves the cut item before an item, as Ctrl+Shift+V does; see
+     * {@link #pasteInto}.
+     *
+     * @param target
+     *            the item to move it before, not {@code null}
+     * @return {@code true} if an item was cut and dropped
+     */
+    public boolean pasteBefore(T target) {
+        return paste(target, DropLocation.BEFORE);
+    }
+
+    /**
+     * Moves the cut item after an item; see {@link #pasteInto}.
+     *
+     * @param target
+     *            the item to move it after, not {@code null}
+     * @return {@code true} if an item was cut and dropped
+     */
+    public boolean pasteAfter(T target) {
+        return paste(target, DropLocation.AFTER);
+    }
+
+    private boolean paste(T target, DropLocation location) {
+        Objects.requireNonNull(target, "target");
+        T item = cutItem;
+        if (item == null || !canMove(item) || !canDropOn(item, target)) {
+            return false;
+        }
+        cancelCut();
+        fireEvent(new DropEvent<>(this, false, item, target, location));
+        return true;
+    }
+
+    /** Tells the browser the cut item, by its key, or that none is. */
+    private void sendCutItem() {
+        getElement().callJsFunction("cutItem",
+                cutItem != null && keyMapper.has(cutItem) ? keyMapper.key(cutItem) : null);
     }
 
     /**
@@ -962,12 +1056,38 @@ public class Tree<T> extends Component
         T target = keyMapper.get(targetKey);
         DropLocation dropLocation = Arrays.stream(DropLocation.values())
                 .filter(value -> value.name().equals(location)).findFirst().orElse(null);
-        if (dragged == null || target == null || dropLocation == null || selectionReadOnly()
-                || !itemDraggableProvider.test(dragged) || !itemEnabledProvider.test(dragged)
-                || !itemDroppableProvider.test(target) || isSelfOrDescendant(target, dragged)) {
+        if (dragged == null || target == null || dropLocation == null || !canMove(dragged)
+                || !canDropOn(dragged, target)) {
             return;
         }
+        // Pasted with Ctrl+V, which the browser has already shown
+        if (cutItem != null && dataProvider.getId(cutItem).equals(dataProvider.getId(dragged))) {
+            cutItem = null;
+        }
         fireEvent(new DropEvent<>(this, true, dragged, target, dropLocation));
+    }
+
+    /**
+     * Cuts an item, or none, as the user did in the browser with Ctrl+X or
+     * Escape, which the browser has already shown.
+     *
+     * @param key
+     *            the key of the item, or {@code null} for none
+     */
+    @ClientCallable
+    void cut(String key) {
+        T item = key == null ? null : keyMapper.get(key);
+        cutItem = item != null && canMove(item) ? item : null;
+    }
+
+    /** Whether the user can move an item: draggable, enabled, and the selection not read-only. */
+    private boolean canMove(T item) {
+        return !selectionReadOnly() && itemDraggableProvider.test(item) && itemEnabledProvider.test(item);
+    }
+
+    /** Whether an item can be dropped on a target: one taking drops, neither the item nor its descendant. */
+    private boolean canDropOn(T item, T target) {
+        return itemDroppableProvider.test(target) && !isSelfOrDescendant(target, item);
     }
 
     /** Whether the selection, single or checked, is read-only: they share the element's property. */

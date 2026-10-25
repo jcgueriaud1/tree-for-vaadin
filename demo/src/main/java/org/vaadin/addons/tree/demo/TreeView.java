@@ -288,9 +288,22 @@ public class TreeView extends Main {
                     + event.getTargetItem().getName() + " by the user");
         });
 
+        // The context menu renames and moves projects: the way on a touch screen, without F2, Ctrl+X nor dragging
         TreeContextMenu<Project> menu = tree.addContextMenu();
-        menu.addItem("Rename", event -> menu.getTargetItem().ifPresent(tree::editItem));
-        menu.setDynamicContentHandler(project -> project != null);
+        menu.setDynamicContentHandler(project -> {
+            if (project == null) {
+                return false;
+            }
+            menu.removeAll();
+            menu.addItem("Rename", event -> tree.editItem(project));
+            menu.addItem("Cut", event -> tree.cutItem(project));
+            tree.getCutItem().filter(cut -> !isSelfOrAncestor(data, cut, project)).ifPresent(cut -> {
+                menu.addItem("Paste into", event -> tree.pasteInto(project));
+                menu.addItem("Paste before", event -> tree.pasteBefore(project));
+                menu.addItem("Paste after", event -> tree.pasteAfter(project));
+            });
+            return true;
+        });
 
         Button add = new Button("Add a report", event -> {
             // The reports in the data, with the name the user may have given them
@@ -351,6 +364,16 @@ public class TreeView extends Main {
         options.getStyle().set("display", "flex").set("flex-wrap", "wrap").set("gap", "1em");
 
         return new Section(new H2("A form field, read-only or disabled"), options, label, tree, status);
+    }
+
+    /** Whether a project is the other one or one of its ancestors: the other cannot be moved into it. */
+    private static boolean isSelfOrAncestor(TreeData<Project> data, Project project, Project other) {
+        for (Project current = other; current != null; current = data.getParent(current)) {
+            if (current.equals(project)) {
+                return true;
+            }
+        }
+        return false;
     }
 
     /** Moves a project before, after or into another: into puts it last among the other's child items. */

@@ -43,6 +43,8 @@ type FakeServer = TreeServer & {
   undroppable: string[];
   /** The drop calls made, as [draggedKey, targetKey, location]. */
   drops: string[][];
+  /** The cut calls made: the key of the item cut, or null for none. */
+  cuts: (string | null)[];
   /** The keys of the parents whose child items fail to load, null for the root items. */
   failing: (string | null)[];
   /** While true, fetches wait until release() is called. */
@@ -84,6 +86,7 @@ function serverWith(roots: FakeItem[]): FakeServer {
     draggable: [],
     undroppable: [],
     drops: [],
+    cuts: [],
     failing: [],
     hold: false,
     release() {
@@ -134,6 +137,9 @@ function serverWith(roots: FakeItem[]): FakeServer {
     },
     drop(draggedKey, targetKey, location) {
       server.drops.push([draggedKey, targetKey, location]);
+    },
+    cut(key) {
+      server.cuts.push(key);
     },
   };
   return server;
@@ -1107,7 +1113,8 @@ describe('tfv-tree', () => {
       await sendKeys({ press: 'Control+x' });
       await tree.updateComplete;
       expect(dropState(tree, 'Music')).to.deep.equal(['cut']);
-      await announcedPolitely(DEFAULT_I18N.cut.replace('{0}', 'Music'));
+      expect(server.cuts).to.deep.equal(['1']);
+      await announcedPolitely(`${DEFAULT_I18N.cut.replace('{0}', 'Music')} ${DEFAULT_I18N.cutHint}`);
 
       await sendKeys({ press: 'ArrowDown' });
       await sendKeys({ press: 'Control+v' });
@@ -1134,10 +1141,30 @@ describe('tfv-tree', () => {
       await sendKeys({ press: 'Escape' });
       await tree.updateComplete;
       expect(dropState(tree, 'Music')).to.be.empty;
+      expect(server.cuts).to.deep.equal(['1', null]);
       await sendKeys({ press: 'ArrowDown' });
       await sendKeys({ press: 'Control+v' });
 
       expect(server.drops).to.be.empty;
+    });
+
+    it('shows the item the server cuts, saying so without the keys, and lets Ctrl+V paste it', async () => {
+      const { tree, server } = await draggableTree();
+
+      tree.cutItem('1');
+      await tree.updateComplete;
+      expect(dropState(tree, 'Music')).to.deep.equal(['cut']);
+      await announcedPolitely(DEFAULT_I18N.cut.replace('{0}', 'Music'));
+
+      item(tree, 'Pictures').focus();
+      await sendKeys({ press: 'Control+v' });
+      expect(server.drops).to.deep.equal([['1', '2', 'INTO']]);
+
+      tree.cutItem('0');
+      tree.cutItem(null);
+      await tree.updateComplete;
+      expect(dropState(tree, 'Documents')).to.be.empty;
+      expect(server.cuts).to.be.empty;
     });
 
     it('leaves Ctrl+X and Ctrl+V alone when there is nothing to cut or paste', async () => {
@@ -1757,6 +1784,7 @@ describe('tfv-tree', () => {
           selectionPath: 'Sisältää valitun kohteen',
           editor: 'Nimi',
           cut: '{0} leikattu',
+          cutHint: 'Ctrl+V liittää',
         };
       });
       tree.setSelection(null, '0');
