@@ -193,6 +193,27 @@ type Row =
   | { kind: 'loading'; level: Level; depth: number }
   | { kind: 'empty' | 'error'; parentKey: string; depth: number };
 
+/** What renders in place of rows out of view, in virtual scrolling: their height, from the index of the first. */
+type Spacer = { kind: 'spacer'; from: number; height: number };
+
+/** How many visible items the tree renders all of, unless the server sets `virtualScrollingThreshold`. */
+export const VIRTUAL_SCROLLING_THRESHOLD = 2000;
+
+/** The smallest index whose offset is at least `y`, or the length if none is. */
+function lowerBound(offsets: Float64Array, y: number): number {
+  let low = 0;
+  let high = offsets.length;
+  while (low < high) {
+    const middle = (low + high) >> 1;
+    if (offsets[middle] < y) {
+      low = middle + 1;
+    } else {
+      high = middle;
+    }
+  }
+  return low;
+}
+
 function newLevel(parent: Node | null): Level {
   return { parent, nodes: [], size: -1, loading: null, failed: false };
 }
@@ -209,7 +230,12 @@ function hasMore(level: Level): boolean {
  * (ADR-0001): the root items first, the child items of an item when it is first
  * expanded, and the next page of a level when its end scrolls into view. Every item
  * fetched stays in the DOM, flat, with its level and position in `aria-level`,
- * `aria-posinset` and `aria-setsize`.
+ * `aria-posinset` and `aria-setsize`, unless there are more visible items than
+ * `virtualScrollingThreshold`: then only the rows near the view render, and the
+ * focused item, the item in the tab order, the item being edited, dragged or dropped
+ * on, with spacers of the height of the rows in between (ADR-0003). Every item is
+ * as high as the first one rendered, and every loading or message row as the first
+ * of those.
  *
  * One item at a time is in the tab order (roving tabindex): the focused item, or when
  * focus enters the tree, the selected item if visible, else the first item. The keys
@@ -273,6 +299,7 @@ export class TfvTree extends LitElement {
     disabled: { type: Boolean, reflect: true },
     readonly: { type: Boolean },
     pageSize: { type: Number },
+    virtualScrollingThreshold: { type: Number },
     itemIconMode: { type: String },
     i18n: { type: Object, attribute: false },
     _focusedKey: { state: true },
@@ -285,6 +312,9 @@ export class TfvTree extends LitElement {
     _draggedKey: { state: true },
     _cutKey: { state: true },
     _dropTarget: { state: true },
+    _viewport: { state: true },
+    _itemHeight: { state: true },
+    _messageHeight: { state: true },
   };
 
   /*
@@ -363,6 +393,11 @@ export class TfvTree extends LitElement {
        */
       content-visibility: auto;
       contain-intrinsic-size: auto 1lh;
+    }
+
+    /* Virtual scrolling places the rows by their real height: no guess, and only the rows near the view render */
+    :host([virtual]) [part~='item'] {
+      content-visibility: visible;
     }
 
     @media (any-hover: hover) {
@@ -617,6 +652,8 @@ export class TfvTree extends LitElement {
   /** Set by the server when the value is read-only: the user cannot change the selection. */
   declare readonly: boolean;
   declare pageSize: number;
+  /** How many visible items the tree renders all of; past that, virtual scrolling. Set by the server. */
+  declare virtualScrollingThreshold: number;
   /** How item icons are shown, set by the server. */
   declare itemIconMode: ItemIconMode;
   /** The texts the tree shows by itself, set by the server. */
@@ -642,6 +679,26 @@ export class TfvTree extends LitElement {
   declare _cutKey: string | null;
   /** Where the item dragged would be dropped, if anywhere. */
   declare _dropTarget: { key: string; location: DropLocation } | null;
+  /** The part of the rows in view, in pixels from the top of the first row. */
+  declare _viewport: { top: number; bottom: number };
+  /** The height of an item, and of a loading or message row, as measured in virtual scrolling. */
+  declare _itemHeight: number;
+  declare _messageHeight: number;
+
+  /** Whether the last render was virtual: only the rows near the view. */
+  private _virtual = false;
+  /** The key of the item `scrollToItem` scrolls to, which renders until it is in view. */
+  private _scrollTargetKey: string | null = null;
+  private _viewportFrame = 0;
+  private _resizeObserver?: ResizeObserver;
+  private readonly _onViewportChange = (): void => {
+    if (this._virtual && this._viewportFrame === 0) {
+      this._viewportFrame = requestAnimationFrame(() => {
+        this._viewportFrame = 0;
+        this._measureViewport();
+      });
+    }
+  };
 
   private _root: Level = newLevel(null);
 
@@ -678,6 +735,7 @@ export class TfvTree extends LitElement {
     this.disabled = false;
     this.readonly = false;
     this.pageSize = PAGE_SIZE;
+    this.virtualScrollingThreshold = VIRTUAL_SCROLLING_THRESHOLD;
     this.itemIconMode = 'svg';
     this.i18n = DEFAULT_I18N;
     this._focusedKey = null;
@@ -690,6 +748,10 @@ export class TfvTree extends LitElement {
     this._draggedKey = null;
     this._cutKey = null;
     this._dropTarget = null;
+    this._viewport = { top: 0, bottom: window.innerHeight };
+    // Guesses, until measured
+    this._itemHeight = 32;
+    this._messageHeight = 28;
   }
 
   override connectedCallback(): void {
@@ -700,11 +762,22 @@ export class TfvTree extends LitElement {
     this._loadingRowObserver = new IntersectionObserver((entries) => this._onLoadingRowsVisible(entries), {
       rootMargin: '0px 0px 100px 0px',
     });
+    // Any scrolling may bring other rows into view: the tree's, the page's, or a container's
+    document.addEventListener('scroll', this._onViewportChange, { capture: true, passive: true });
+    window.addEventListener('resize', this._onViewportChange);
+    this._resizeObserver = new ResizeObserver(this._onViewportChange);
+    this._resizeObserver.observe(this);
   }
 
   override disconnectedCallback(): void {
     this._loadingRowObserver?.disconnect();
     this._loadingRowObserver = undefined;
+    document.removeEventListener('scroll', this._onViewportChange, { capture: true });
+    window.removeEventListener('resize', this._onViewportChange);
+    this._resizeObserver?.disconnect();
+    this._resizeObserver = undefined;
+    cancelAnimationFrame(this._viewportFrame);
+    this._viewportFrame = 0;
     clearTimeout(this._typedTimeout);
     this._typed = '';
     this._closeTooltip();
@@ -793,10 +866,19 @@ export class TfvTree extends LitElement {
         level = node.children;
       }
     }
+    if (!node) {
+      return;
+    }
+    this._scrollTargetKey = node.item.key;
+    this.requestUpdate();
     await this.updateComplete;
-    const element = node ? this._itemElement(node.item.key) : null;
+    const element = this._itemElement(node.item.key);
     if (element) {
       await scrollIntoViewSettled(element);
+    }
+    if (this._scrollTargetKey === node.item.key) {
+      this._scrollTargetKey = null;
+      this.requestUpdate();
     }
   }
 
@@ -888,14 +970,105 @@ export class TfvTree extends LitElement {
       observer.disconnect();
       this.renderRoot.querySelectorAll('[part="loading"]').forEach((row) => observer.observe(row));
     }
+    this.toggleAttribute('virtual', this._virtual);
+    if (this._virtual) {
+      this._measureRows();
+      this._measureViewport();
+    }
+  }
+
+  /** Learns the height of an item, and of a loading or message row, from those rendered. */
+  private _measureRows(): void {
+    const item = Array.from(this.renderRoot.querySelectorAll<HTMLElement>('[role="treeitem"]')).find(
+      (element) => element.dataset.key !== this._editingKey,
+    );
+    const message = this.renderRoot.querySelector<HTMLElement>('[part="loading"], [part="empty"], [part="error"]');
+    const itemHeight = item?.getBoundingClientRect().height;
+    const messageHeight = message?.getBoundingClientRect().height;
+    if (itemHeight && Math.abs(itemHeight - this._itemHeight) > 0.1) {
+      this._itemHeight = itemHeight;
+    }
+    if (messageHeight && Math.abs(messageHeight - this._messageHeight) > 0.1) {
+      this._messageHeight = messageHeight;
+    }
+  }
+
+  /** Learns which part of the rows is in view: in the tree's box, and in the window. */
+  private _measureViewport(): void {
+    const rows = this.renderRoot.querySelector('#rows');
+    if (!rows) {
+      return;
+    }
+    const origin = rows.getBoundingClientRect().top;
+    const box = this.getBoundingClientRect();
+    const top = Math.max(box.top, 0);
+    const bottom = Math.max(top, Math.min(box.bottom, window.innerHeight));
+    const viewport = { top: top - origin, bottom: bottom - origin };
+    if (Math.abs(viewport.top - this._viewport.top) >= 1 || Math.abs(viewport.bottom - this._viewport.bottom) >= 1) {
+      this._viewport = viewport;
+    }
+  }
+
+  /**
+   * The rows to render: all of them up to the threshold of visible items; past it, the
+   * rows near the view and those that must stay rendered, with spacers in between.
+   */
+  private _windowOf(rows: Row[], tabbableKey: string | null): (Row | Spacer)[] {
+    let items = 0;
+    for (const row of rows) {
+      if (row.kind === 'item') {
+        items++;
+      }
+    }
+    this._virtual = items > this.virtualScrollingThreshold;
+    if (!this._virtual) {
+      return rows;
+    }
+    const offsets = new Float64Array(rows.length + 1);
+    rows.forEach((row, index) => {
+      offsets[index + 1] = offsets[index] + (row.kind === 'item' ? this._itemHeight : this._messageHeight);
+    });
+    const { top, bottom } = this._viewport;
+    const margin = Math.max(300, bottom - top);
+    const shown = new Set<number>();
+    const end = Math.min(rows.length, lowerBound(offsets, bottom + margin));
+    for (let index = Math.max(0, lowerBound(offsets, top - margin) - 1); index < end; index++) {
+      shown.add(index);
+    }
+    const kept = new Set(
+      [this._focusedKey, tabbableKey, this._editingKey, this._draggedKey, this._dropTarget?.key, this._scrollTargetKey].filter(
+        (key) => key != null,
+      ),
+    );
+    rows.forEach((row, index) => {
+      if (row.kind === 'item' && kept.has(row.node.item.key)) {
+        shown.add(index);
+      }
+    });
+    const window: (Row | Spacer)[] = [];
+    let next = 0;
+    for (const index of [...shown].sort((a, b) => a - b)) {
+      if (index > next) {
+        window.push({ kind: 'spacer', from: next, height: offsets[index] - offsets[next] });
+      }
+      window.push(rows[index]);
+      next = index + 1;
+    }
+    if (next < rows.length) {
+      window.push({ kind: 'spacer', from: next, height: offsets[rows.length] - offsets[next] });
+    }
+    return window;
   }
 
   protected override render() {
     const rows = this._rows();
     const tabbableKey = this._tabbableKey(rows);
-    const symbols = this._iconSymbolsOf(rows);
+    const shown = this._windowOf(rows, tabbableKey);
+    const shownRows = shown.filter((row): row is Row => row.kind !== 'spacer');
+    const symbols = this._iconSymbolsOf(shownRows);
     return html`
       <div
+        id="rows"
         role="none"
         @keydown=${this._onKeyDown}
         @focusin=${this._onFocusIn}
@@ -911,24 +1084,28 @@ export class TfvTree extends LitElement {
         @mousedown=${this._dismissTooltip}
       >
         ${repeat(
-          rows,
+          shown,
           (row) =>
             row.kind === 'item'
               ? row.node.item.key
               : row.kind === 'loading'
                 ? `loading:${row.level.parent?.item.key ?? ''}`
-                : `${row.kind}:${row.parentKey}`,
+                : row.kind === 'spacer'
+                  ? `spacer:${row.from}`
+                  : `${row.kind}:${row.parentKey}`,
           (row) =>
             row.kind === 'item'
               ? this._renderItem(row, tabbableKey)
               : row.kind === 'loading'
                 ? this._renderLoading(row)
-                : this._renderMessage(row),
+                : row.kind === 'spacer'
+                  ? html`<div aria-hidden="true" style="height: ${row.height}px"></div>`
+                  : this._renderMessage(row),
         )}
       </div>
       <div hidden>
         <span id=${SELECTION_PATH_DESCRIPTION_ID}>${this.i18n.selectionPath}</span>
-        ${rows.map((row) =>
+        ${shownRows.map((row) =>
           row.kind === 'item' && row.node.item.tooltip
             ? html`<span id=${this._descriptionId(row.node.item.key)}>${row.node.item.tooltip}</span>`
             : nothing,
@@ -1776,8 +1953,18 @@ export class TfvTree extends LitElement {
     }
     event.preventDefault();
     if (target) {
-      this._focusedKey = target.item.key;
-      this._itemElement(target.item.key)?.focus();
+      this._focusItem(target.item.key);
+    }
+  }
+
+  /** Moves focus to an item, once rendered if virtual scrolling left it out; focusing scrolls it into view. */
+  private _focusItem(key: string): void {
+    this._focusedKey = key;
+    const element = this._itemElement(key);
+    if (element) {
+      element.focus();
+    } else {
+      this.updateComplete.then(() => this._itemElement(key)?.focus());
     }
   }
 

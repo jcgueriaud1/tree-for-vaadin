@@ -28,6 +28,10 @@ _Avoid_: Rendered item, shown node
 The single item that receives keyboard input; independent of selection.
 _Avoid_: Active item, current item
 
+**Virtual scrolling**:
+Rendering only the rows near the viewport, and the focused item, once the tree has more visible items than a threshold; spacers stand for the rest.
+_Avoid_: Lazy rendering, windowing (lazy loading is fetching items from the server)
+
 **Disabled item**:
 An item the user can focus, expand and collapse, but not select.
 _Avoid_: Inactive item, greyed-out item, read-only item (read-only is the whole tree)
