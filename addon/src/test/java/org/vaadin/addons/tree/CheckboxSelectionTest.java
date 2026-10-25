@@ -38,10 +38,11 @@ class CheckboxSelectionTest extends BrowserlessTest {
     private final Folder music = new Folder("Music");
 
     private Tree<Folder> tree;
+    private TreeData<Folder> data;
 
     @BeforeEach
     void addTree() {
-        TreeData<Folder> data = new TreeData<>();
+        data = new TreeData<>();
         data.addRootItems(docs, music);
         data.addItems(docs, invoices, letters);
         data.addItems(letters, y2025, y2026);
@@ -221,6 +222,45 @@ class CheckboxSelectionTest extends BrowserlessTest {
 
         assertEquals(Set.of(), tree.asMultiSelect().getValue());
         assertEquals(2, calls("setChecked").size(), "each undone in the browser");
+    }
+
+    @Test
+    void aCheckedItemMovedElsewhereMarksItsNewAncestorsAfterARefresh() {
+        tree.asMultiSelect().select(y2025);
+        assertTrue(tree.isPartiallyChecked(letters));
+
+        // The app moves 2025 from Letters up into Documents, as a drop would
+        data.setParent(y2025, docs);
+        tree.getDataProvider().refreshAll();
+
+        assertEquals(Set.of(y2025), tree.asMultiSelect().getValue());
+        assertTrue(tree.isPartiallyChecked(docs));
+        assertFalse(tree.isPartiallyChecked(letters), "no longer holds it");
+    }
+
+    @Test
+    void aCheckedItemMovedIntoAParentWithoutOtherChildItemsChecksTheParentInstead() {
+        tree.asMultiSelect().select(y2025);
+        List<MultiSelectionEvent<Tree<Folder>, Folder>> events = new ArrayList<>();
+        tree.asMultiSelect().addSelectionListener(events::add);
+
+        data.setParent(y2025, music);
+        tree.getDataProvider().refreshAll();
+
+        assertEquals(Set.of(music), tree.asMultiSelect().getValue(), "its only child item is checked");
+        assertEquals(1, events.size());
+        assertFalse(events.get(0).isFromClient());
+    }
+
+    @Test
+    void aCheckedItemRemovedFromTheDataStaysInTheValueForTheAppToClear() {
+        tree.asMultiSelect().select(y2025);
+
+        data.removeItem(letters);
+        tree.getDataProvider().refreshAll();
+
+        assertEquals(Set.of(y2025), tree.asMultiSelect().getValue());
+        assertFalse(tree.isPartiallyChecked(docs));
     }
 
     @Test

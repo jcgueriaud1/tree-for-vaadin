@@ -150,6 +150,26 @@ final class CheckedItems<T> implements Serializable {
         }
     }
 
+    /**
+     * Checks the same items again after the data changed, as they may have
+     * moved: under new ancestors, under a checked one, or next to the last
+     * unchecked siblings. An item no longer in the data, as the data provider
+     * tells by throwing, stays in the value, without ancestors, for the app to
+     * clear.
+     */
+    void refresh() {
+        List<T> items = new ArrayList<>(items());
+        top.clear();
+        for (T item : items) {
+            try {
+                check(item);
+            } catch (IllegalArgumentException gone) {
+                top.put(hierarchy.id(item), new Checked<>(item, List.of()));
+            }
+        }
+        updatePartial();
+    }
+
     /** Unchecks everything. */
     void clear() {
         top.clear();

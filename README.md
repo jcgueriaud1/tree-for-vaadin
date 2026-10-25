@@ -273,7 +273,13 @@ menu.setDynamicContentHandler(project -> {
 });
 ```
 
-The demo's projects can be dragged, cut and pasted with the keyboard, and cut and pasted from their context menu.
+The demo's "Drag and drop" section moves files in a tree with single selection and in one with checkboxes, where
+checked items keep their state where they go; its projects can also be cut and pasted from their context menu.
+
+With checkboxes, the tree checks the same items again when the data is refreshed: a checked item moved under
+another parent marks its new ancestors as partially checked, and a parent whose child items are now all checked
+becomes checked itself, with a value change event. A checked item removed from the data stays in the value for the
+app to clear.
 
 ### Filtering and search
 

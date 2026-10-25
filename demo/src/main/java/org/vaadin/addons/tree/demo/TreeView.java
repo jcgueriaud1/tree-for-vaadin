@@ -15,6 +15,7 @@ import com.vaadin.flow.component.checkbox.Checkbox;
 import com.vaadin.flow.component.html.Div;
 import com.vaadin.flow.component.html.H1;
 import com.vaadin.flow.component.html.H2;
+import com.vaadin.flow.component.html.H3;
 import com.vaadin.flow.component.html.Main;
 import com.vaadin.flow.component.html.Paragraph;
 import com.vaadin.flow.component.html.Section;
@@ -102,7 +103,7 @@ public class TreeView extends Main {
         // Room on the sides on a phone, and lines short enough to read on a wide screen
         getStyle().set("display", "block").set("padding", "0 1rem 1rem").set("max-width", "60rem");
         add(new H1("Tree for Vaadin"), new RouterLink("Performance tests", PerformanceView.class), new ThemeSwitcher(),
-                folders(), catalogue(), products(), projects(), shortcut());
+                folders(), catalogue(), products(), projects(), dragAndDrop(), shortcut());
     }
 
     /** A tree as wide as the demo's trees, narrower on a narrow screen. */
@@ -334,6 +335,66 @@ public class TreeView extends Main {
                 : new TreeI18n()));
 
         return new Section(new H2("Projects, changing and failing"), add, removeAll, restore, french, tree, log);
+    }
+
+    /**
+     * Files moved by dragging them, or with Ctrl+X then Ctrl+V or Ctrl+Shift+V,
+     * in a tree with single selection and in one with checkboxes. Each drag
+     * moves the one item dragged; with checkboxes, the checked items keep
+     * their state where they go.
+     */
+    private static Section dragAndDrop() {
+        Div trees = new Div(movableFiles("Single selection", "Files to select", Tree.SelectionMode.SINGLE),
+                movableFiles("Checkboxes", "Files to check", Tree.SelectionMode.CHECKBOX));
+        trees.getStyle().set("display", "flex").set("flex-wrap", "wrap").set("gap", "1em 3em");
+        return new Section(new H2("Drag and drop"),
+                new Paragraph("Drag a file before, into or after another, or cut it with Ctrl+X and paste it into"
+                        + " the focused item with Ctrl+V, before it with Ctrl+Shift+V."),
+                trees);
+    }
+
+    /** A tree of files the user can move, with a line telling the moves, and the selection or checked items. */
+    private static Div movableFiles(String heading, String ariaLabel, Tree.SelectionMode selectionMode) {
+        TreeData<Project> data = new TreeData<>();
+        Project inbox = new Project(1, "Inbox");
+        Project work = new Project(2, "Work");
+        data.addRootItems(inbox, work, new Project(3, "Archive"));
+        data.addItems(inbox, new Project(4, "Invoice 1"), new Project(5, "Invoice 2"), new Project(6, "Receipt"));
+        data.addItems(work, new Project(7, "Plans"), new Project(8, "Notes"));
+        TreeDataProvider<Project> provider = new TreeDataProvider<>(data);
+
+        Tree<Project> tree = newTree();
+        tree.setAriaLabel(ariaLabel);
+        tree.setSelectionMode(selectionMode);
+        tree.setDataProvider(provider);
+        tree.setItemLabelGenerator(Project::getName);
+        // A folder is a root item here; the others are files
+        tree.setItemIconGenerator(project -> data.getParent(project) == null ? "vaadin:folder" : "vaadin:file");
+        tree.expand(inbox, work);
+
+        Paragraph log = new Paragraph();
+        log.getElement().setAttribute("role", "status");
+        tree.setItemDraggableProvider(project -> true);
+        tree.addDropListener(event -> {
+            move(data, event.getDraggedItem(), event.getTargetItem(), event.getLocation());
+            provider.refreshAll();
+            log.setText("Moved " + event.getDraggedItem().getName() + " "
+                    + event.getLocation().name().toLowerCase(Locale.ROOT) + " " + event.getTargetItem().getName());
+        });
+
+        Paragraph selection = new Paragraph();
+        selection.getElement().setAttribute("role", "status");
+        if (selectionMode == Tree.SelectionMode.CHECKBOX) {
+            selection.setText("Checked: nothing");
+            tree.asMultiSelect().addValueChangeListener(event -> selection.setText(event.getValue().isEmpty()
+                    ? "Checked: nothing"
+                    : "Checked: " + event.getValue().stream().map(Project::getName).collect(Collectors.joining(", "))));
+        } else {
+            selection.setText("Selected: nothing");
+            tree.asSingleSelect().addValueChangeListener(event -> selection.setText(
+                    "Selected: " + (event.getValue() == null ? "nothing" : event.getValue().getName())));
+        }
+        return new Div(new H3(heading), tree, log, selection);
     }
 
     /**
