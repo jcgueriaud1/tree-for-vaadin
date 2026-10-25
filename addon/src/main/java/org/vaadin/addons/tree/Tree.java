@@ -1221,6 +1221,10 @@ public class Tree<T> extends Component
     private void refresh() {
         keyMapper.removeAll();
         updateSelectionPath();
+        if (selectionMode == SelectionMode.CHECKBOX) {
+            // Checked items may have moved
+            changeCheckedItems(CheckedItems::refresh, false);
+        }
         if (isAttached()) {
             getElement().callJsFunction("refresh");
         }

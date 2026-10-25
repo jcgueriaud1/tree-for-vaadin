@@ -755,6 +755,36 @@ class TreeViewIT {
     }
 
     @Test
+    void draggingAFileInTheSingleSelectionTreeMovesItAndKeepsItSelected() {
+        Locator tree = page.getByRole(AriaRole.TREE, new Page.GetByRoleOptions().setName("Files to select"));
+        item(tree, "Receipt").click();
+        assertThat(statusOf(tree, 1)).hasText("Selected: Receipt");
+
+        item(tree, "Receipt").dragTo(item(tree, "Work"));
+
+        assertThat(statusOf(tree, 0)).hasText("Moved Receipt into Work");
+        assertThat(tree.getByRole(AriaRole.TREEITEM)).hasText(new String[] { "Inbox", "Invoice 1", "Invoice 2", "Work",
+                "Plans", "Notes", "Receipt", "Archive" });
+        assertThat(item(tree, "Receipt")).hasAttribute("aria-selected", "true");
+    }
+
+    @Test
+    void draggingACheckedFileInTheCheckboxTreeTakesItsCheckWhereItGoes() {
+        Locator tree = page.getByRole(AriaRole.TREE, new Page.GetByRoleOptions().setName("Files to check"));
+        item(tree, "Invoice 1").click();
+        assertThat(item(tree, "Inbox")).hasAttribute("aria-checked", "mixed");
+
+        // Into the empty Archive: its only child item is checked, so Archive is
+        item(tree, "Invoice 1").dragTo(item(tree, "Archive"));
+
+        assertThat(statusOf(tree, 0)).hasText("Moved Invoice 1 into Archive");
+        assertThat(statusOf(tree, 1)).hasText("Checked: Archive");
+        assertThat(item(tree, "Inbox")).hasAttribute("aria-checked", "false");
+        assertThat(item(tree, "Archive")).hasAttribute("aria-checked", "true");
+        assertNoAccessibilityViolations(page);
+    }
+
+    @Test
     void theTextsTheTreeShowsByItselfCanBeTranslated() {
         page.getByRole(AriaRole.BUTTON, new Page.GetByRoleOptions().setName("Remove all projects")).click();
         assertThat(projects().getByText("No items")).isVisible();
@@ -919,6 +949,12 @@ class TreeViewIT {
 
     private Locator productsStatus() {
         return page.locator("section").filter(new Locator.FilterOptions().setHas(products())).getByRole(AriaRole.STATUS);
+    }
+
+    /** A status line after a tree, by its index in the tree's own block. */
+    private Locator statusOf(Locator tree, int index) {
+        return page.locator("div").filter(new Locator.FilterOptions().setHas(tree)).last()
+                .getByRole(AriaRole.STATUS).nth(index);
     }
 
     private Locator checkbox(String label) {
