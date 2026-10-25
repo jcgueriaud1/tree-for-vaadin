@@ -81,6 +81,8 @@ public class PerformanceView extends Main {
     private final IntegerField pageSize = sizeField("Page size", 50);
     private final Paragraph size = new Paragraph();
     private final Checkbox checkboxes = new Checkbox("Checkboxes");
+    /** Each icon is a vaadin-icon of its own, which costs: see the difference. */
+    private final Checkbox icons = new Checkbox("Icons", true);
     private final OrderedList results = new OrderedList();
     private final Div treeHolder = new Div();
     private Tree<GeneratedDataProvider.Item> tree;
@@ -116,6 +118,7 @@ public class PerformanceView extends Main {
             return timed(() -> tree.asMultiSelect().select(provider.rootItems().toList()));
         });
         checkboxes.addValueChangeListener(event -> buildTree());
+        icons.addValueChangeListener(event -> buildTree());
 
         // A live region announcing each result; on a div, as a list cannot have the role
         Div log = new Div(results);
@@ -128,7 +131,7 @@ public class PerformanceView extends Main {
                 new Paragraph("A tree of generated items, fetched from a backend a page at a time. Each action is"
                         + " timed in the browser, from the click until the tree has fetched and rendered what it"
                         + " needs, with the time the server spent and the items in the page then."),
-                new Section(new H2("Tree"), shape, size, checkboxes, build, treeHolder),
+                new Section(new H2("Tree"), shape, size, options(), build, treeHolder),
                 new Section(new H2("Actions"), expandAll, collapseAll, scrollToLast, checkAll),
                 new Section(new H2("Results"), log));
         buildTree();
@@ -138,6 +141,12 @@ public class PerformanceView extends Main {
     protected void onAttach(AttachEvent attachEvent) {
         super.onAttach(attachEvent);
         attachEvent.getUI().getPage().executeJs(RECORD_CLICKS);
+    }
+
+    private Div options() {
+        Div options = new Div(checkboxes, icons);
+        options.getStyle().set("display", "flex").set("flex-wrap", "wrap").set("gap", "1em");
+        return options;
     }
 
     private static IntegerField sizeField(String label, int value) {
@@ -165,7 +174,9 @@ public class PerformanceView extends Main {
         tree.setHeight("25em");
         tree.setPageSize(valueOf(pageSize));
         tree.setItemLabelGenerator(GeneratedDataProvider.Item::name);
-        tree.setItemIconGenerator(item -> provider.hasChildren(item) ? "vaadin:folder" : "vaadin:file");
+        if (icons.getValue()) {
+            tree.setItemIconGenerator(item -> provider.hasChildren(item) ? "vaadin:folder" : "vaadin:file");
+        }
         if (checkboxes.getValue()) {
             tree.setSelectionMode(Tree.SelectionMode.CHECKBOX);
         }

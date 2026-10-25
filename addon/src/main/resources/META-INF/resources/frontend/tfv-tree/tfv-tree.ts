@@ -139,6 +139,22 @@ function ancestors(node: Node): Node[] {
   return found;
 }
 
+/**
+ * Scrolls an item into view, again and again until it stays put: the items brought into view on the way
+ * are only laid out then (content-visibility), with their real size in place of the guessed one, which
+ * moves the item. Gives up after a few frames.
+ */
+async function scrollIntoViewSettled(element: HTMLElement): Promise<void> {
+  for (let i = 0; i < 5; i++) {
+    element.scrollIntoView({ block: 'nearest' });
+    const top = element.getBoundingClientRect().top;
+    await new Promise((resolve) => requestAnimationFrame(resolve));
+    if (element.getBoundingClientRect().top === top) {
+      return;
+    }
+  }
+}
+
 /** Has the tooltip show the given text for the given item. */
 function pointTooltip(tooltip: Tooltip, element: HTMLElement, text: string): void {
   tooltip.target = element;
@@ -311,6 +327,15 @@ export class TfvTree extends LitElement {
         var(--tfv-tree-item-padding-inline);
       border-radius: var(--tfv-tree-item-border-radius);
       cursor: default;
+      /*
+       * The browser skips style, layout and paint of the items out of view, which stay in the page and the
+       * accessibility tree: a tree of thousands of items renders and scrolls to an item twice as fast. Until
+       * an item is first shown, the height of its content is guessed as one line, to which its padding and
+       * min-height apply; that is its height unless its icon is taller. A wrong guess makes items jump as they
+       * come into view.
+       */
+      content-visibility: auto;
+      contain-intrinsic-size: auto 1lh;
     }
 
     @media (any-hover: hover) {
@@ -725,8 +750,9 @@ export class TfvTree extends LitElement {
       }
     }
     await this.updateComplete;
-    if (node) {
-      this._itemElement(node.item.key)?.scrollIntoView({ block: 'nearest' });
+    const element = node ? this._itemElement(node.item.key) : null;
+    if (element) {
+      await scrollIntoViewSettled(element);
     }
   }
 
