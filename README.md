@@ -17,7 +17,7 @@ The words in bold below are defined in [GLOSSARY.md](GLOSSARY.md); the design de
 - **Items** fetched lazily from any `HierarchicalDataProvider`, a page at a time, as the user expands items and scrolls.
 - **Expanding** and **collapsing** by the user or by the server, with events telling which.
 - One **selected item**, bound like any field with `asSingleSelect()`, with its ancestors marked.
-- Icons and tooltips on items.
+- Icons and tooltips on items, and a context menu.
 - Data refreshes that keep the state of the tree, and messages for an empty tree and for items that fail to load,
   in your language.
 - Read-only and disabled states, for the whole tree or for single items.
@@ -154,6 +154,31 @@ user can still focus it, read its tooltip, and expand and collapse it, so its ch
 cannot select it, by clicking or with Enter or Space. The server can still select it with `setValue`. Give a
 disabled item a tooltip that says why it is disabled: it is also its accessible description.
 
+### Context menu
+
+`addContextMenu()` gives the tree a `TreeContextMenu`, a Vaadin `ContextMenu` that knows the item it opens on:
+the item the user right-clicks or long-presses, or the focused item when they press Shift+F10 or the Menu key.
+
+```java
+TreeContextMenu<Folder> menu = tree.addContextMenu();
+menu.addItem("Open", event -> menu.getTargetItem().ifPresent(this::open));
+menu.addItem("Delete", event -> menu.getTargetItem().ifPresent(this::delete));
+
+// Or items that depend on the item, and no menu outside the items
+menu.setDynamicContentHandler(folder -> {
+    if (folder == null) {
+        return false;
+    }
+    menu.removeAll();
+    menu.addItem(tree.isExpanded(folder) ? "Collapse" : "Expand", event -> toggle(folder));
+    return true;
+});
+```
+
+`getTargetItem()` is empty when the menu opens outside the items. The menu opens on disabled items too, as the
+app may offer something there, but not on a disabled tree. Opening it changes neither the selection nor the focused
+item; it takes focus, and gives it back to the item when it closes.
+
 ### Data changes, errors and texts (i18n)
 
 `refreshAll()` on the data provider has the browser fetch the items again. Items that still exist, by their id
@@ -212,6 +237,7 @@ does not follow focus: moving the **focused item** never changes the selected it
 | Left | Collapses an expanded item; otherwise moves focus to its parent |
 | Enter, Space | Selects the focused item, unless it is disabled |
 | `*` | Expands the focused item and its siblings, in one `ExpandEvent` |
+| Shift+F10, Menu key | Opens the context menu of the focused item, if the tree has one |
 | Any character | Moves focus to the next visible item whose label starts with it; characters typed within half a second, spaces included, are searched together |
 
 Left and Right are swapped when the tree is right to left (`dir="rtl"`). Type-ahead only searches the items

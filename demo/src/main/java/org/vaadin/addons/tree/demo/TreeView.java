@@ -22,6 +22,7 @@ import com.vaadin.flow.function.SerializablePredicate;
 import com.vaadin.flow.router.PageTitle;
 import com.vaadin.flow.router.Route;
 import org.vaadin.addons.tree.Tree;
+import org.vaadin.addons.tree.TreeContextMenu;
 import org.vaadin.addons.tree.TreeI18n;
 
 /**
@@ -73,6 +74,28 @@ public class TreeView extends Main {
         tree.setItemIconGenerator(folder -> "vaadin:folder");
         // The path of a child item; a root item needs none
         tree.setItemTooltipGenerator(folder -> data.getParent(folder) == null ? null : path(data, folder));
+
+        // Right-click, long press, Shift+F10 or the Menu key: items for the folder the menu opens on
+        TreeContextMenu<Folder> menu = tree.addContextMenu();
+        menu.setDynamicContentHandler(folder -> {
+            if (folder == null) {
+                return false;
+            }
+            menu.removeAll();
+            menu.addItem("Select", event -> menu.getTargetItem().ifPresent(tree.asSingleSelect()::setValue));
+            if (!data.getChildren(folder).isEmpty()) {
+                boolean expanded = tree.isExpanded(folder);
+                menu.addItem(expanded ? "Collapse" : "Expand",
+                        event -> menu.getTargetItem().ifPresent(target -> {
+                            if (expanded) {
+                                tree.collapse(target);
+                            } else {
+                                tree.expand(target);
+                            }
+                        }));
+            }
+            return true;
+        });
 
         List<Folder> parents = descendants(data, null).filter(folder -> !data.getChildren(folder).isEmpty()).toList();
         Button expandAll = new Button("Expand all", event -> tree.expand(parents));

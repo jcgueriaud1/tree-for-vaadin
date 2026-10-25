@@ -167,6 +167,10 @@ function hasMore(level: Level): boolean {
  * tree only holds treeitems; its text is the item's `aria-describedby` instead, from a
  * hidden copy, so the item is described whether or not the tooltip shows.
  *
+ * A Vaadin context menu targeting the tree learns the item it opens on from
+ * `getContextMenuBeforeOpenDetail`: the item right-clicked, long-pressed, or focused
+ * when Shift+F10 or the Menu key is pressed.
+ *
  * The server updates an item with `refreshItem`, and has the tree fetch everything
  * again with `refresh`. If fetching the child items of an item fails, the item
  * collapses back, the server is told, and its group shows the error for
@@ -572,6 +576,28 @@ export class TfvTree extends LitElement {
     } else {
       super.focus(options);
     }
+  }
+
+  /**
+   * The detail Vaadin's context menu sends the server before opening: the key of the
+   * item it opens on, or an empty key outside the items. Called by the context menu's
+   * target connector while the event that opens it is dispatched.
+   */
+  getContextMenuBeforeOpenDetail(event: Event): { key: string } {
+    // The contextmenu event comes as the source event of Vaadin's gesture; a click comes as itself
+    const source: Event & { __composedPath?: EventTarget[] } =
+      (event as CustomEvent<{ sourceEvent?: Event }>).detail?.sourceEvent ?? event;
+    // On iOS the gesture fires after a timeout, once its touchstart has lost its path: Vaadin saves it
+    const path = source.__composedPath ?? source.composedPath();
+    const element = path.find(
+      (target): target is HTMLElement => target instanceof HTMLElement && target.getAttribute('role') === 'treeitem',
+    );
+    return { key: element?.dataset.key ?? '' };
+  }
+
+  /** Keeps Vaadin's context menu closed while the tree is disabled. */
+  preventContextMenu(_event: Event): boolean {
+    return this.disabled;
   }
 
   protected override willUpdate(): void {

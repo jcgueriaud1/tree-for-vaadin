@@ -60,7 +60,8 @@ import com.vaadin.flow.shared.Registration;
  * Each item can show an icon in front of its label, and a tooltip, from
  * {@link #setItemIconGenerator} and {@link #setItemTooltipGenerator}. Items
  * can be disabled with {@link #setItemEnabledProvider}: the user can focus and
- * expand them, but not select them.
+ * expand them, but not select them. {@link #addContextMenu()} adds a context
+ * menu for the items.
  * <p>
  * When the data changes, {@link HierarchicalDataProvider#refreshAll()} has the
  * browser fetch the items again: items that still exist, by their id, stay
@@ -453,6 +454,28 @@ public class Tree<T> extends Component
      */
     public MultiSelect<Tree<T>, T> asMultiSelect() {
         throw new IllegalStateException("The tree is not in a multiple selection mode: " + selectionMode);
+    }
+
+    /**
+     * Adds a context menu for the items of the tree, which tells the item it
+     * opens on. Add menu items to it.
+     *
+     * @return the context menu
+     * @see TreeContextMenu
+     */
+    public TreeContextMenu<T> addContextMenu() {
+        return new TreeContextMenu<>(this);
+    }
+
+    /**
+     * Gets the item the browser knows by a key.
+     *
+     * @param key
+     *            the key
+     * @return the item, or {@code null} if the key is no longer known
+     */
+    T itemForKey(String key) {
+        return keyMapper.get(key);
     }
 
     /**

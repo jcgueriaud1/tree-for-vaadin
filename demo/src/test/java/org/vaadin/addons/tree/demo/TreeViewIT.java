@@ -7,6 +7,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.util.List;
 import java.util.regex.Pattern;
+import java.util.stream.Stream;
 
 import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.AfterEach;
@@ -24,6 +25,7 @@ import com.microsoft.playwright.Playwright;
 import com.microsoft.playwright.assertions.LocatorAssertions;
 import com.microsoft.playwright.options.AriaRole;
 import com.microsoft.playwright.options.BoundingBox;
+import com.microsoft.playwright.options.MouseButton;
 
 /** The demo in a real browser, as assistive technology sees it. Started by the build on demo.url. */
 class TreeViewIT {
@@ -550,6 +552,36 @@ class TreeViewIT {
     }
 
     @Test
+    void rightClickingAnItemOpensAContextMenuForIt() {
+        item(folders(), "Documents").click(new Locator.ClickOptions().setButton(MouseButton.RIGHT));
+
+        assertThat(page.getByRole(AriaRole.MENUITEM)).hasText(new String[] { "Select", "Expand" });
+        // Vaadin's menu items carry aria-selected, which a menuitem does not support, in an overlay outside any
+        // landmark; they are not ours to fix
+        assertNoAccessibilityViolations(page, "vaadin-context-menu-item");
+        page.getByRole(AriaRole.MENUITEM, new Page.GetByRoleOptions().setName("Expand")).click();
+
+        assertThat(item(folders(), "Documents")).hasAttribute("aria-expanded", "true");
+        assertThat(status()).hasText("Expanded Documents by the server");
+        assertThat(item(folders(), "Documents")).hasAttribute("aria-selected", "false");
+    }
+
+    @Test
+    void shiftF10OpensTheContextMenuOfTheFocusedItemAndFocusComesBackToIt() {
+        tabIntoFolders();
+        page.keyboard().press("ArrowDown");
+        assertThat(item(folders(), "Music")).isFocused();
+
+        page.keyboard().press("Shift+F10");
+
+        assertThat(page.getByRole(AriaRole.MENUITEM, new Page.GetByRoleOptions().setName("Select"))).isFocused();
+        page.keyboard().press("Enter");
+
+        assertThat(status()).hasText("Selected Music by the server");
+        assertThat(item(folders(), "Music")).isFocused();
+    }
+
+    @Test
     void theTextsTheTreeShowsByItselfCanBeTranslated() {
         page.getByRole(AriaRole.BUTTON, new Page.GetByRoleOptions().setName("Remove all projects")).click();
         assertThat(projects().getByText("No items")).isVisible();
@@ -645,9 +677,13 @@ class TreeViewIT {
         assertNoAccessibilityViolations(page);
     }
 
-    static void assertNoAccessibilityViolations(Page page) {
+    static void assertNoAccessibilityViolations(Page page, String... excluded) {
         // Vaadin's connection indicator sits outside any landmark; it is not ours to fix
-        AxeResults results = new AxeBuilder(page).exclude(List.of("vaadin-connection-indicator")).analyze();
+        AxeBuilder axe = new AxeBuilder(page);
+        // One selector a call: a list is a path into frames and shadow roots
+        Stream.concat(Stream.of("vaadin-connection-indicator"), Stream.of(excluded))
+                .forEach(selector -> axe.exclude(List.of(selector)));
+        AxeResults results = axe.analyze();
 
         assertEquals(List.of(), results.getViolations().stream()
                 .map(violation -> violation.getId() + ": " + violation.getHelp() + " "
