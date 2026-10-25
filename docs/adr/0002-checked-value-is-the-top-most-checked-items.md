@@ -1,0 +1,7 @@
+# The value of checkbox selection is the top-most checked items
+
+In checkbox selection mode, checking a parent checks all its descendants, including ones the browser has not fetched. We made the value (`asMultiSelect().getValue()`) the set of top-most checked items: checking Documents gives `{Documents}`, not Documents and every descendant, and checking the last unchecked child of a parent replaces the children with the parent. Listing every checked item, or every checked leaf, would make checking a root of a large backend fetch all its descendants; the top-most items are compact and need no fetching, and `Tree.isChecked(item)` answers for any item by its ancestors. A partially checked item is told to assistive technology with `aria-checked="mixed"` alone, as the ARIA tree pattern does, to be checked with real screen readers rather than doubled with a description.
+
+## Consequences
+
+Checkbox selection needs the data provider's `getParent`, as the selection path does. Unchecking an item under a checked ancestor fetches the child items of each ancestor down to it, to check its siblings instead. The server keeps the value and tells the browser the state of each item it sends, and, after each change, the keys of the checked and partially checked items the browser has; the browser checks the descendants of a checked item itself. Apps that want every checked item walk the data themselves.

@@ -16,7 +16,8 @@ The words in bold below are defined in [GLOSSARY.md](GLOSSARY.md); the design de
   [ARIA tree pattern](https://www.w3.org/WAI/ARIA/apg/patterns/treeview/), type-ahead included.
 - **Items** fetched lazily from any `HierarchicalDataProvider`, a page at a time, as the user expands items and scrolls.
 - **Expanding** and **collapsing** by the user or by the server, with events telling which.
-- One **selected item**, bound like any field with `asSingleSelect()`, with its ancestors marked.
+- One **selected item**, bound like any field with `asSingleSelect()`, with its ancestors marked; or checkboxes,
+  where checking a parent checks its descendants, loaded or not, with `asMultiSelect()`.
 - Icons and tooltips on items, a context menu, and renaming items in place.
 - Filtering through the data provider, and searching for items not loaded yet.
 - Data refreshes that keep the state of the tree, and messages for an empty tree and for items that fail to load,
@@ -25,7 +26,7 @@ The words in bold below are defined in [GLOSSARY.md](GLOSSARY.md); the design de
 - Touch screens: items and their toggle are fingertip-sized there.
 - The Aura and Lumo themes, light or dark, and styling through parts and CSS custom properties.
 
-Checkbox selection and the other ideas for later are in the [issues](https://github.com/jcgueriaud1/tree-for-vaadin/issues).
+Drag and drop and the other ideas for later are in the [issues](https://github.com/jcgueriaud1/tree-for-vaadin/issues).
 
 ## Installation
 
@@ -127,7 +128,7 @@ Expanding an item does not expand its ancestors: its child items show once they 
 
 ### Selection
 
-There is one **selected item** at most (`setSelectionMode(SelectionMode.SINGLE)`, the only mode for now), and
+There is one **selected item** at most (`setSelectionMode(SelectionMode.SINGLE)`, the default), and
 every item can be selected, parents too. The `Tree` is not itself a `HasValue`: `asSingleSelect()` is, so it can
 be bound with a `Binder`:
 
@@ -154,6 +155,33 @@ still shows its items, dimmed, but takes no input and is out of the tab order (`
 user can still focus it, read its tooltip, and expand and collapse it, so its child items stay reachable, but
 cannot select it, by clicking or with Enter or Space. The server can still select it with `setValue`. Give a
 disabled item a tooltip that says why it is disabled: it is also its accessible description.
+
+### Checkbox selection
+
+`setSelectionMode(SelectionMode.CHECKBOX)` gives each item a checkbox instead: clicking an item, or Space or Enter,
+checks or unchecks it, and its descendants with it, loaded or not. An item with some checked descendants, but not
+all, is a **partially checked item**; checking it checks it as a whole. Changing the mode clears the selection.
+
+```java
+tree.setSelectionMode(SelectionMode.CHECKBOX);
+tree.asMultiSelect().select(documents);          // checks Documents and everything under it
+tree.asMultiSelect().getValue();                 // {documents}: the top-most checked items
+tree.isChecked(letters);                         // true: an ancestor is checked
+tree.asMultiSelect().deselect(letters);          // {invoices}: Documents is partially checked now
+tree.isPartiallyChecked(documents);              // true
+binder.forField(tree.asMultiSelect()).bind(Order::getFolders, Order::setFolders);
+```
+
+The value is the top-most checked items ([ADR-0002](docs/adr/0002-checked-value-is-the-top-most-checked-items.md)):
+checking a parent gives the parent, not its descendants, so checking a root of a large backend fetches nothing, and
+checking the last unchecked child of a parent gives the parent instead of its child items. Unchecking an item
+under a checked ancestor checks its siblings instead, fetching the child items of each item on the way down to it.
+`isChecked(item)` tells whether any item is checked, and `asMultiSelect().isSelected(item)` says the same.
+Checkbox selection needs the data provider to implement `getParent`, as `TreeDataProvider` does.
+
+Items are `aria-checked`, `mixed` when partially checked, and the tree is `aria-multiselectable`; there is no
+`aria-selected` in this mode. Read-only and disabled items work as in single selection: the user cannot check
+them, but checking a parent checks its disabled descendants too.
 
 ### Context menu
 
@@ -296,7 +324,7 @@ does not follow focus: moving the **focused item** never changes the selected it
 | Home / End | Moves focus to the first / last visible item |
 | Right | Expands a collapsed item; on an expanded item, moves focus to its first child item |
 | Left | Collapses an expanded item; otherwise moves focus to its parent |
-| Enter, Space | Selects the focused item, unless it is disabled |
+| Enter, Space | Selects the focused item, unless it is disabled; with checkboxes, checks or unchecks it |
 | `*` | Expands the focused item and its siblings, in one `ExpandEvent` |
 | Shift+F10, Menu key | Opens the context menu of the focused item, if the tree has one |
 | F2 | Renames the focused item, if it can be renamed; then Enter saves and Escape cancels |
@@ -345,6 +373,7 @@ indicator.
 | `label` | The label of an item |
 | `editor` | The text field in place of the label of an item being renamed |
 | `selection-path-marker` | The dot after an ancestor of the selected item |
+| `checkbox` | The checkbox of an item, in checkbox selection mode |
 | `loading` | The row shown while the items of a level are fetched |
 | `empty` | The row shown when the tree has no items |
 | `error` | The row shown when items fail to load |
@@ -361,6 +390,8 @@ the shadow DOM, the same states are attributes of the item.
 | `expanded` | the item is expanded |
 | `selected` | the item is the selected item |
 | `selection-path` | the item is an ancestor of the selected item |
+| `checked` | the item is checked, in checkbox selection mode |
+| `partially-checked` | some of the item's descendants are checked, but not all |
 | `focused` | the item has focus |
 | `focus-ring` | the item has focus from the keyboard, and shows a focus ring |
 | `disabled` | the item is disabled by `setItemEnabledProvider` |
@@ -382,6 +413,7 @@ the shadow DOM, the same states are attributes of the item.
 | `--tfv-tree-selected-background` | `--aura-accent-text-color` / `--lumo-primary-text-color` |
 | `--tfv-tree-selected-text-color` | `--aura-background-color` / `--lumo-base-color` |
 | `--tfv-tree-selection-path-color` | `--aura-accent-text-color` / `--lumo-primary-text-color` |
+| `--tfv-tree-checkbox-color`, `--tfv-tree-checkbox-mark-color` | the fill of a checked checkbox and its mark: as the selected item's background and text |
 | `--tfv-tree-focus-ring-color` | `--lumo-primary-text-color` / `--vaadin-focus-ring-color` (Aura sets the latter) |
 | `--tfv-tree-focus-ring-width` | `--vaadin-focus-ring-width`, or 2px |
 

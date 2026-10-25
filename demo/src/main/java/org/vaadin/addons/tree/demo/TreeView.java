@@ -2,6 +2,7 @@ package org.vaadin.addons.tree.demo;
 
 import java.util.List;
 import java.util.Locale;
+import java.util.Set;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.function.Function;
 import java.util.stream.Collectors;
@@ -98,7 +99,7 @@ public class TreeView extends Main {
     public TreeView() {
         // Room on the sides on a phone, and lines short enough to read on a wide screen
         getStyle().set("display", "block").set("padding", "0 1rem 1rem").set("max-width", "60rem");
-        add(new H1("Tree for Vaadin"), new ThemeSwitcher(), folders(), catalogue(), projects(), shortcut());
+        add(new H1("Tree for Vaadin"), new ThemeSwitcher(), folders(), catalogue(), products(), projects(), shortcut());
     }
 
     /** A tree as wide as the demo's trees, narrower on a narrow screen. */
@@ -204,6 +205,39 @@ public class TreeView extends Main {
         search.addKeyDownListener(Key.ENTER, event -> find.click());
 
         return new Section(new H2("Catalogue, from a backend"), search, find, tree, log);
+    }
+
+    /**
+     * The catalogue in checkbox selection mode: checking a category checks its
+     * products without fetching them, and the value is the top-most checked
+     * items.
+     */
+    private static Section products() {
+        Tree<CatalogDataProvider.Entry> tree = newTree();
+        tree.setAriaLabel("Products");
+        tree.setSelectionMode(Tree.SelectionMode.CHECKBOX);
+        tree.setDataProvider(new CatalogDataProvider());
+        tree.setItemLabelGenerator(CatalogDataProvider.Entry::name);
+        tree.setItemIconGenerator(entry -> entry instanceof CatalogDataProvider.Category ? "vaadin:folder" : "vaadin:file");
+        tree.setHeight("20em");
+
+        Paragraph value = new Paragraph("Checked: nothing");
+        value.getElement().setAttribute("role", "status");
+        tree.asMultiSelect().addValueChangeListener(event -> value.setText(checkedText(event.getValue())));
+        Button clear = new Button("Uncheck all", event -> tree.asMultiSelect().clear());
+
+        return new Section(new H2("Checkbox selection, from a backend"), clear, tree, value);
+    }
+
+    /** The checked items, the first few by name, as "Checked: 3 items: Books, Games item 1, Music". */
+    private static String checkedText(Set<CatalogDataProvider.Entry> checked) {
+        if (checked.isEmpty()) {
+            return "Checked: nothing";
+        }
+        String names = checked.stream().limit(3).map(CatalogDataProvider.Entry::name)
+                .collect(Collectors.joining(", "));
+        return checked.size() == 1 ? "Checked: " + names
+                : "Checked: " + checked.size() + " items: " + names + (checked.size() > 3 ? ", …" : "");
     }
 
     /**

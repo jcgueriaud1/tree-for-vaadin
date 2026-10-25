@@ -5,8 +5,9 @@ import { announce } from '@vaadin/a11y-base/src/announce.js';
 /**
  * An item as the server sends it: the key to refer to it by, its label, its icon and
  * tooltip if any, whether it has child items, whether it is expanded, whether it is
- * the selected item, whether it is on the selection path, whether it is disabled and
- * whether the user can edit its label.
+ * the selected item, whether it is on the selection path, whether it is disabled,
+ * whether the user can edit its label, and in checkbox selection mode whether it is
+ * checked.
  */
 export interface TreeItem {
   key: string;
@@ -22,7 +23,12 @@ export interface TreeItem {
   disabled: boolean;
   /** Whether the user can edit the label of the item. */
   editable: boolean;
+  /** Whether the item is checked, in checkbox selection mode; `null` in single selection mode. */
+  checked: CheckState | null;
 }
+
+/** The state of an item's checkbox: `mixed` when some of its descendants are checked, but not all. */
+export type CheckState = 'true' | 'false' | 'mixed';
 
 /** A page of child items, with the number of children the parent has in all. */
 export interface ItemPage {
@@ -36,6 +42,7 @@ export interface TreeServer {
   setExpanded(expanded: boolean, ...keys: string[]): unknown;
   select(key: string): unknown;
   edit(key: string, label: string): unknown;
+  setChecked(key: string, checked: boolean): unknown;
 }
 
 /** How many items are fetched at once, unless the server sets `pageSize`. */
@@ -174,6 +181,13 @@ function hasMore(level: Level): boolean {
  * tree only holds treeitems; its text is the item's `aria-describedby` instead, from a
  * hidden copy, so the item is described whether or not the tooltip shows.
  *
+ * In checkbox selection mode, each item has a checkbox (part `checkbox`, hidden from
+ * assistive technology) and `aria-checked`, `mixed` when partially checked, in place
+ * of `aria-selected`. Clicking an item, Space or Enter asks `$server.setChecked` to
+ * check or uncheck it; the server answers with `setChecked`, the keys of the top-most
+ * checked items and of the partially checked ones, and the tree checks the
+ * descendants of a checked item itself (ADR-0002).
+ *
  * The label of an editable item is edited in a text field (part `editor`) in place of
  * the label: on F2, on double-click, or when the server calls `editItem`. Enter, or
  * focus leaving the field, saves it with `$server.edit`, which sends the item back
@@ -202,6 +216,8 @@ export class TfvTree extends LitElement {
     _selectedKey: { state: true },
     _selectionPath: { state: true },
     _editingKey: { state: true },
+    _checkedKeys: { state: true },
+    _partialKeys: { state: true },
   };
 
   /*
@@ -239,6 +255,8 @@ export class TfvTree extends LitElement {
         --lumo-disabled-text-color,
         var(--vaadin-text-color-disabled, color-mix(in srgb, currentColor 50%, transparent))
       );
+      --tfv-tree-checkbox-color: var(--aura-accent-text-color, var(--lumo-primary-text-color, Highlight));
+      --tfv-tree-checkbox-mark-color: var(--aura-background-color, var(--lumo-base-color, HighlightText));
       /* The width of the toggle, and of the spacer standing for it */
       --_toggle-width: 1em;
 
@@ -364,6 +382,43 @@ export class TfvTree extends LitElement {
       transform: rotate(45deg);
     }
 
+    /* A checkbox drawn in CSS: hidden from assistive technology, which reads aria-checked */
+    [part='checkbox'] {
+      flex: none;
+      position: relative;
+      box-sizing: border-box;
+      width: 1em;
+      height: 1em;
+      border: 1px solid var(--tfv-tree-secondary-text-color);
+      border-radius: 0.2em;
+    }
+
+    [part~='item'][checked] > [part='checkbox'],
+    [part~='item'][partially-checked] > [part='checkbox'] {
+      background: var(--tfv-tree-checkbox-color);
+      border-color: var(--tfv-tree-checkbox-color);
+    }
+
+    /* A check mark, or a dash when partially checked */
+    [part~='item'][checked] > [part='checkbox']::after,
+    [part~='item'][partially-checked] > [part='checkbox']::after {
+      content: '';
+      position: absolute;
+      border-color: var(--tfv-tree-checkbox-mark-color);
+      border-style: solid;
+    }
+
+    [part~='item'][checked] > [part='checkbox']::after {
+      inset: 0.12em 0.3em 0.22em;
+      border-width: 0 0.12em 0.12em 0;
+      transform: rotate(45deg);
+    }
+
+    [part~='item'][partially-checked] > [part='checkbox']::after {
+      inset: calc(50% - 0.06em) 0.2em auto;
+      border-width: 0.12em 0 0;
+    }
+
     [part='icon'] {
       flex: none;
       width: var(--tfv-tree-icon-size);
@@ -434,6 +489,21 @@ export class TfvTree extends LitElement {
       [part~='item'][disabled]:not([selected]) {
         color: GrayText;
       }
+
+      [part='checkbox'] {
+        forced-color-adjust: none;
+        border-color: CanvasText;
+      }
+
+      [part~='item'][checked] > [part='checkbox'],
+      [part~='item'][partially-checked] > [part='checkbox'] {
+        background: Highlight;
+        border-color: Highlight;
+      }
+
+      [part~='item'] > [part='checkbox']::after {
+        border-color: HighlightText;
+      }
     }
   `;
 
@@ -454,6 +524,10 @@ export class TfvTree extends LitElement {
   declare _selectionPath: ReadonlySet<string>;
   /** The key of the item whose label is being edited, if any. */
   declare _editingKey: string | null;
+  /** In checkbox selection mode, the keys of the top-most checked items, whose descendants are checked too. */
+  declare _checkedKeys: ReadonlySet<string>;
+  /** In checkbox selection mode, the keys of the partially checked items. */
+  declare _partialKeys: ReadonlySet<string>;
 
   private _root: Level = newLevel(null);
   private _nodes = new Map<string, Node>();
@@ -492,6 +566,8 @@ export class TfvTree extends LitElement {
     this._selectedKey = null;
     this._selectionPath = new Set();
     this._editingKey = null;
+    this._checkedKeys = new Set();
+    this._partialKeys = new Set();
   }
 
   override connectedCallback(): void {
@@ -521,7 +597,9 @@ export class TfvTree extends LitElement {
     this._nodes.clear();
     this._clearLoadErrors();
     this._editingKey = null;
-    // The items fetched again tell which are selected
+    // The items fetched again tell which are selected or checked
+    this._checkedKeys = new Set();
+    this._partialKeys = new Set();
     this._selectedKey = null;
     this._selectionPath = new Set();
     await this._fetchNextPage(this._root);
@@ -538,6 +616,7 @@ export class TfvTree extends LitElement {
     }
     node.item = item;
     node.expanded = item.expandable && item.expanded;
+    this._learnCheckState(node);
     if (refreshChildren || !item.expandable) {
       this._forgetChildren(node);
       if (node.expanded) {
@@ -596,6 +675,15 @@ export class TfvTree extends LitElement {
     if (node) {
       this._itemElement(node.item.key)?.scrollIntoView({ block: 'nearest' });
     }
+  }
+
+  /**
+   * Sets the checked items, by the keys of the top-most checked items and of the
+   * partially checked items the browser has. Called by the server.
+   */
+  setChecked(checkedKeys: string[], partialKeys: string[]): void {
+    this._checkedKeys = new Set(checkedKeys);
+    this._partialKeys = new Set(partialKeys);
   }
 
   /** Edits the label of an item, if it is shown and editable. Called by the server. */
@@ -719,11 +807,14 @@ export class TfvTree extends LitElement {
     const onSelectionPath = this._selectionPath.has(item.key);
     const expanded = item.expandable && node.expanded;
     const focused = item.key === this._focusedKey;
+    const checkState = this._checkState(node);
     // The states are part names too, as ::part() cannot be followed by an attribute selector
     const states = {
       expanded,
       selected,
       'selection-path': onSelectionPath,
+      checked: checkState === 'true',
+      'partially-checked': checkState === 'mixed',
       focused,
       'focus-ring': focused && this._focusRing,
       disabled: item.disabled,
@@ -743,12 +834,15 @@ export class TfvTree extends LitElement {
         aria-setsize=${row.setSize}
         aria-expanded=${item.expandable ? String(node.expanded) : nothing}
         aria-busy=${node.expanded && node.children?.loading ? 'true' : nothing}
-        aria-selected=${String(selected)}
+        aria-selected=${checkState === null ? String(selected) : nothing}
+        aria-checked=${checkState ?? nothing}
         aria-disabled=${item.disabled ? 'true' : nothing}
         aria-describedby=${describedBy.length > 0 ? describedBy.join(' ') : nothing}
         ?expanded=${expanded}
         ?selected=${selected}
         ?selection-path=${onSelectionPath}
+        ?checked=${states.checked}
+        ?partially-checked=${states['partially-checked']}
         ?focused=${focused}
         ?focus-ring=${states['focus-ring']}
         ?disabled=${item.disabled}
@@ -759,6 +853,7 @@ export class TfvTree extends LitElement {
         ${item.expandable
           ? html`<span part="toggle" aria-hidden="true"></span>`
           : html`<span part="toggle-spacer" aria-hidden="true"></span>`}
+        ${checkState === null ? nothing : html`<span part="checkbox" aria-hidden="true"></span>`}
         ${item.icon ? html`<vaadin-icon part="icon" icon=${item.icon} aria-hidden="true"></vaadin-icon>` : nothing}
         ${item.key === this._editingKey
           ? html`<input
@@ -989,7 +1084,58 @@ export class TfvTree extends LitElement {
     if (item.onSelectionPath) {
       this._selectionPath = new Set(this._selectionPath).add(item.key);
     }
+    this._learnCheckState(node);
     return node;
+  }
+
+  /**
+   * The state of an item's checkbox, or null in single selection mode: checked if it
+   * or an ancestor is among the top-most checked items.
+   */
+  private _checkState(node: Node): CheckState | null {
+    if (node.item.checked === null) {
+      return null;
+    }
+    for (let current: Node | null = node; current; current = current.parent) {
+      if (this._checkedKeys.has(current.item.key)) {
+        return 'true';
+      }
+    }
+    return this._partialKeys.has(node.item.key) ? 'mixed' : 'false';
+  }
+
+  /** Takes the state the server sent with an item into the checked and partially checked keys. */
+  private _learnCheckState(node: Node): void {
+    const { key, checked } = node.item;
+    const checkedKeys = new Set(this._checkedKeys);
+    const partialKeys = new Set(this._partialKeys);
+    checkedKeys.delete(key);
+    partialKeys.delete(key);
+    // A checked item under a checked parent is checked by it already
+    if (checked === 'true' && !(node.parent && this._checkState(node.parent) === 'true')) {
+      checkedKeys.add(key);
+    } else if (checked === 'mixed') {
+      partialKeys.add(key);
+    }
+    this._checkedKeys = checkedKeys;
+    this._partialKeys = partialKeys;
+  }
+
+  /** Asks the server to check an item, or to uncheck it if it is checked, unless the user cannot. */
+  private _toggleChecked(node: Node): void {
+    if (this.readonly || node.item.disabled) {
+      return;
+    }
+    this.$server?.setChecked(node.item.key, this._checkState(node) !== 'true');
+  }
+
+  /** Selects an item, or in checkbox selection mode checks or unchecks it. */
+  private _activate(node: Node): void {
+    if (node.item.checked === null) {
+      this._select(node);
+    } else {
+      this._toggleChecked(node);
+    }
   }
 
   /** Fetches the first page of child items of an expanded item, unless fetched already. */
@@ -1145,7 +1291,7 @@ export class TfvTree extends LitElement {
     if ((event.target as HTMLElement).closest('[part="toggle"]')) {
       this._toggle(node);
     } else {
-      this._select(node);
+      this._activate(node);
     }
   }
 
@@ -1295,7 +1441,7 @@ export class TfvTree extends LitElement {
         target = node.parent ?? undefined;
       }
     } else if (event.key === 'Enter' || (event.key === ' ' && this._typed === '')) {
-      this._select(node);
+      this._activate(node);
     } else if (event.key === 'F2') {
       this._startEditing(node);
     } else if (event.key === '*') {
