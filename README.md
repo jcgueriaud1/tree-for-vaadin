@@ -18,6 +18,7 @@ The words in bold below are defined in [GLOSSARY.md](GLOSSARY.md); the design de
 - **Expanding** and **collapsing** by the user or by the server, with events telling which.
 - One **selected item**, bound like any field with `asSingleSelect()`, with its ancestors marked.
 - Icons and tooltips on items, a context menu, and renaming items in place.
+- Filtering through the data provider, and searching for items not loaded yet.
 - Data refreshes that keep the state of the tree, and messages for an empty tree and for items that fail to load,
   in your language.
 - Read-only and disabled states, for the whole tree or for single items.
@@ -203,6 +204,40 @@ menu.addItem("Rename", event -> menu.getTargetItem().ifPresent(tree::editItem));
 
 `editItem(item)` starts renaming an item the browser shows. Disabled items, and any item while the selection is
 read-only, cannot be renamed. The text field is named "Label" for assistive technology (`TreeI18n.setEditor`).
+
+### Filtering and search
+
+The tree shows what its data provider gives it, filter included. `TreeDataProvider`'s filter keeps the ancestors
+of the items that match, and `expandRecursively` expands them to show the matches:
+
+```java
+TreeDataProvider<Folder> provider = new TreeDataProvider<>(data);
+tree.setDataProvider(provider);
+tree.setI18n(new TreeI18n().setEmpty("No folder matches"));
+
+filterField.addValueChangeListener(event -> {
+    provider.setFilter(folder -> folder.name().contains(event.getValue()));
+    tree.expandRecursively(data.getRootItems(), Integer.MAX_VALUE);
+});
+```
+
+`expandRecursively(items, depth)` and `collapseRecursively(items, depth)` work as in TreeGrid: depth 0 is the
+items alone. They fetch the child items of every item down to the depth, with the filter, so mind the cost with a
+large backend. With an in-memory data provider, an item whose child items are all filtered out has no toggle; a
+backend data provider's `hasChildren` is trusted as it is, so make it follow the filter.
+
+To find an item the tree has not fetched yet, ask your backend for it and reveal it with `scrollToItem`, which
+needs `getParent`:
+
+```java
+catalog.find(searchField.getValue()).ifPresent(product -> {
+    tree.scrollToItem(product);              // expands its ancestors, fetching the pages on the way
+    tree.asSingleSelect().setValue(product);
+});
+```
+
+Tell screen reader users the outcome, how many items match or that none does, in a live region such as a
+`role="status"` paragraph: the tree does not announce changes to its items.
 
 ### Data changes, errors and texts (i18n)
 

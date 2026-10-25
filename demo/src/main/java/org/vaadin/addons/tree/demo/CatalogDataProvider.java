@@ -1,6 +1,9 @@
 package org.vaadin.addons.tree.demo;
 
 import java.util.List;
+import java.util.Optional;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 import java.util.stream.IntStream;
 import java.util.stream.Stream;
 
@@ -47,6 +50,31 @@ public class CatalogDataProvider extends AbstractBackEndHierarchicalDataProvider
             new Category("Games", 120),
             new Category("Gift cards", 0),
             new Category("Music", 250));
+
+    /** A product's name: its category, "item" and its number. */
+    private static final Pattern PRODUCT_NAME = Pattern.compile("\\s*(.+?)\\s+item\\s+(\\d{1,9})\\s*",
+            Pattern.CASE_INSENSITIVE);
+
+    /**
+     * Finds a product by its name, as a backend search would, whether or not
+     * the tree has fetched it.
+     *
+     * @param name
+     *            a product's name, such as "Books item 600", in any case
+     * @return the product, or empty if there is none by that name
+     */
+    public static Optional<Product> find(String name) {
+        Matcher matcher = PRODUCT_NAME.matcher(name);
+        if (!matcher.matches()) {
+            return Optional.empty();
+        }
+        int number = Integer.parseInt(matcher.group(2));
+        return CATEGORIES.stream()
+                .filter(category -> category.name().equalsIgnoreCase(matcher.group(1)))
+                .filter(category -> number >= 1 && number <= category.productCount())
+                .findFirst()
+                .map(category -> new Product(category, number - 1));
+    }
 
     @Override
     public int getChildCount(HierarchicalQuery<Entry, Void> query) {
