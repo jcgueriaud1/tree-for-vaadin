@@ -27,6 +27,7 @@ import com.vaadin.flow.data.value.ValueChangeMode;
 import com.vaadin.flow.function.SerializablePredicate;
 import com.vaadin.flow.router.PageTitle;
 import com.vaadin.flow.router.Route;
+import org.vaadin.addons.tree.DropLocation;
 import org.vaadin.addons.tree.Tree;
 import org.vaadin.addons.tree.TreeContextMenu;
 import org.vaadin.addons.tree.TreeI18n;
@@ -277,6 +278,16 @@ public class TreeView extends Main {
             project.setName(name);
             provider.refreshItem(project);
         });
+        // Dragging a project, or Ctrl+X then Ctrl+V or Ctrl+Shift+V, moves it: the app moves it in the data
+        tree.setItemDraggableProvider(project -> true);
+        tree.addDropListener(event -> {
+            move(data, event.getDraggedItem(), event.getTargetItem(), event.getLocation());
+            provider.refreshAll();
+            String where = event.getLocation().name().toLowerCase(Locale.ROOT);
+            log.setText("Moved " + event.getDraggedItem().getName() + " " + where + " "
+                    + event.getTargetItem().getName() + " by the user");
+        });
+
         TreeContextMenu<Project> menu = tree.addContextMenu();
         menu.addItem("Rename", event -> menu.getTargetItem().ifPresent(tree::editItem));
         menu.setDynamicContentHandler(project -> project != null);
@@ -340,6 +351,23 @@ public class TreeView extends Main {
         options.getStyle().set("display", "flex").set("flex-wrap", "wrap").set("gap", "1em");
 
         return new Section(new H2("A form field, read-only or disabled"), options, label, tree, status);
+    }
+
+    /** Moves a project before, after or into another: into puts it last among the other's child items. */
+    private static void move(TreeData<Project> data, Project moved, Project target, DropLocation location) {
+        Project parent = location == DropLocation.INTO ? target : data.getParent(target);
+        data.setParent(moved, parent);
+        List<Project> siblings = (parent == null ? data.getRootItems() : data.getChildren(parent)).stream()
+                .filter(sibling -> !sibling.equals(moved)).toList();
+        switch (location) {
+            case BEFORE -> {
+                int index = siblings.indexOf(target);
+                // After the previous sibling, or first
+                data.moveAfterSibling(moved, index == 0 ? null : siblings.get(index - 1));
+            }
+            case AFTER -> data.moveAfterSibling(moved, target);
+            case INTO -> data.moveAfterSibling(moved, siblings.isEmpty() ? null : siblings.getLast());
+        }
     }
 
     private static void fillProjects(TreeData<Project> data) {

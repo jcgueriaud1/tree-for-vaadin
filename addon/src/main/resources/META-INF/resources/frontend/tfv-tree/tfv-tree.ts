@@ -6,8 +6,8 @@ import { announce } from '@vaadin/a11y-base/src/announce.js';
  * An item as the server sends it: the key to refer to it by, its label, its icon and
  * tooltip if any, whether it has child items, whether it is expanded, whether it is
  * the selected item, whether it is on the selection path, whether it is disabled,
- * whether the user can edit its label, and in checkbox selection mode whether it is
- * checked.
+ * whether the user can edit its label, in checkbox selection mode whether it is
+ * checked, whether the user can drag it, and whether the user can drop items on it.
  */
 export interface TreeItem {
   key: string;
@@ -25,7 +25,12 @@ export interface TreeItem {
   editable: boolean;
   /** Whether the item is checked, in checkbox selection mode; `null` in single selection mode. */
   checked: CheckState | null;
+  draggable: boolean;
+  droppable: boolean;
 }
+
+/** Where an item is dropped, relative to the item it is dropped on; see DropLocation.java. */
+export type DropLocation = 'BEFORE' | 'AFTER' | 'INTO';
 
 /** The state of an item's checkbox: `mixed` when some of its descendants are checked, but not all. */
 export type CheckState = 'true' | 'false' | 'mixed';
@@ -43,6 +48,7 @@ export interface TreeServer {
   select(key: string): unknown;
   edit(key: string, label: string): unknown;
   setChecked(key: string, checked: boolean): unknown;
+  drop(draggedKey: string, targetKey: string, location: DropLocation): unknown;
 }
 
 /** How many items are fetched at once, unless the server sets `pageSize`. */
@@ -77,6 +83,8 @@ export interface TreeI18n {
   selectionPath: string;
   /** The accessible name of the text field that edits the label of an item. */
   editor: string;
+  /** Announced when the user cuts an item to move it with the keyboard; `{0}` stands for its label. */
+  cut: string;
 }
 
 export const DEFAULT_I18N: TreeI18n = {
@@ -85,6 +93,7 @@ export const DEFAULT_I18N: TreeI18n = {
   loadError: 'Could not load the items',
   selectionPath: 'Contains the selected item',
   editor: 'Label',
+  cut: '{0} cut. Ctrl+V moves it into the focused item, Ctrl+Shift+V before it, Escape cancels.',
 };
 
 /** The id of the hidden text that describes each ancestor of the selected item. */
@@ -188,6 +197,13 @@ function hasMore(level: Level): boolean {
  * checked items and of the partially checked ones, and the tree checks the
  * descendants of a checked item itself (ADR-0002).
  *
+ * A draggable item can be dragged and dropped before, into or after another, by where
+ * the pointer is over it (states `drop-before`, `drop-into`, `drop-after` on the target,
+ * `dragged` on the item dragged), or cut with Ctrl+X and pasted into the focused item
+ * with Ctrl+V, before it with Ctrl+Shift+V (state `cut`). Either calls `$server.drop`;
+ * an item is never dropped on itself, into its descendants, or on an item that takes
+ * no drops.
+ *
  * The label of an editable item is edited in a text field (part `editor`) in place of
  * the label: on F2, on double-click, or when the server calls `editItem`. Enter, or
  * focus leaving the field, saves it with `$server.edit`, which sends the item back
@@ -218,6 +234,9 @@ export class TfvTree extends LitElement {
     _editingKey: { state: true },
     _checkedKeys: { state: true },
     _partialKeys: { state: true },
+    _draggedKey: { state: true },
+    _cutKey: { state: true },
+    _dropTarget: { state: true },
   };
 
   /*
@@ -257,6 +276,7 @@ export class TfvTree extends LitElement {
       );
       --tfv-tree-checkbox-color: var(--aura-accent-text-color, var(--lumo-primary-text-color, Highlight));
       --tfv-tree-checkbox-mark-color: var(--aura-background-color, var(--lumo-base-color, HighlightText));
+      --tfv-tree-drop-indicator-color: var(--tfv-tree-focus-ring-color);
       /* The width of the toggle, and of the spacer standing for it */
       --_toggle-width: 1em;
 
@@ -419,6 +439,25 @@ export class TfvTree extends LitElement {
       border-width: 0.12em 0 0;
     }
 
+    /* Where a dragged item would go: a line before or after the target, or a frame around it */
+    [part~='item'][drop-before] {
+      box-shadow: inset 0 var(--tfv-tree-focus-ring-width) 0 0 var(--tfv-tree-drop-indicator-color);
+    }
+
+    [part~='item'][drop-after] {
+      box-shadow: inset 0 calc(var(--tfv-tree-focus-ring-width) * -1) 0 0 var(--tfv-tree-drop-indicator-color);
+    }
+
+    [part~='item'][drop-into] {
+      outline: var(--tfv-tree-focus-ring-width) dashed var(--tfv-tree-drop-indicator-color);
+      outline-offset: calc(var(--tfv-tree-focus-ring-width) * -1);
+    }
+
+    [part~='item'][dragged],
+    [part~='item'][cut] {
+      opacity: 0.5;
+    }
+
     [part='icon'] {
       flex: none;
       width: var(--tfv-tree-icon-size);
@@ -528,6 +567,12 @@ export class TfvTree extends LitElement {
   declare _checkedKeys: ReadonlySet<string>;
   /** In checkbox selection mode, the keys of the partially checked items. */
   declare _partialKeys: ReadonlySet<string>;
+  /** The key of the item being dragged with the mouse, if any. */
+  declare _draggedKey: string | null;
+  /** The key of the item cut with Ctrl+X, to be pasted with Ctrl+V, if any. */
+  declare _cutKey: string | null;
+  /** Where the item dragged would be dropped, if anywhere. */
+  declare _dropTarget: { key: string; location: DropLocation } | null;
 
   private _root: Level = newLevel(null);
   private _nodes = new Map<string, Node>();
@@ -568,6 +613,9 @@ export class TfvTree extends LitElement {
     this._editingKey = null;
     this._checkedKeys = new Set();
     this._partialKeys = new Set();
+    this._draggedKey = null;
+    this._cutKey = null;
+    this._dropTarget = null;
   }
 
   override connectedCallback(): void {
@@ -766,6 +814,10 @@ export class TfvTree extends LitElement {
         @focusout=${this._onFocusOut}
         @click=${this._onClick}
         @dblclick=${this._onDoubleClick}
+        @dragstart=${this._onDragStart}
+        @dragover=${this._onDragOver}
+        @drop=${this._onDrop}
+        @dragend=${this._onDragEnd}
         @mouseover=${this._onMouseOver}
         @mouseleave=${this._onMouseLeave}
         @mousedown=${this._dismissTooltip}
@@ -818,6 +870,11 @@ export class TfvTree extends LitElement {
       focused,
       'focus-ring': focused && this._focusRing,
       disabled: item.disabled,
+      'drop-before': this._dropTarget?.key === item.key && this._dropTarget.location === 'BEFORE',
+      'drop-into': this._dropTarget?.key === item.key && this._dropTarget.location === 'INTO',
+      'drop-after': this._dropTarget?.key === item.key && this._dropTarget.location === 'AFTER',
+      dragged: item.key === this._draggedKey,
+      cut: item.key === this._cutKey,
     };
     const part = ['item', ...Object.entries(states).flatMap(([state, on]) => (on ? [state] : []))].join(' ');
     // The marker is for the eyes: the description tells assistive technology
@@ -846,6 +903,12 @@ export class TfvTree extends LitElement {
         ?focused=${focused}
         ?focus-ring=${states['focus-ring']}
         ?disabled=${item.disabled}
+        ?drop-before=${states['drop-before']}
+        ?drop-into=${states['drop-into']}
+        ?drop-after=${states['drop-after']}
+        ?dragged=${states.dragged}
+        ?cut=${states.cut}
+        draggable=${this._canDrag(node) ? 'true' : nothing}
         tabindex=${!this.disabled && item.key === tabbableKey ? 0 : -1}
         data-key=${item.key}
         style="--_level: ${node.depth - 1}"
@@ -1295,6 +1358,104 @@ export class TfvTree extends LitElement {
     }
   }
 
+  /** Whether the user can move an item, by dragging it or cutting it. */
+  private _canDrag(node: Node): boolean {
+    return node.item.draggable && !node.item.disabled && !this.disabled && !this.readonly;
+  }
+
+  /** Whether an item can be dropped on a target: not on itself, nor into its descendants, nor on an item taking no drops. */
+  private _canDrop(dragged: Node, target: Node): boolean {
+    for (let current: Node | null = target; current; current = current.parent) {
+      if (current === dragged) {
+        return false;
+      }
+    }
+    return target.item.droppable;
+  }
+
+  /** Where over an item the pointer is: its top quarter is before it, its bottom quarter after it, the rest into it. */
+  private _dropLocation(event: DragEvent, element: HTMLElement): DropLocation {
+    const { top, height } = element.getBoundingClientRect();
+    const offset = (event.clientY - top) / height;
+    return offset < 0.25 ? 'BEFORE' : offset > 0.75 ? 'AFTER' : 'INTO';
+  }
+
+  private _onDragStart(event: DragEvent): void {
+    const node = this._eventNode(event);
+    if (!node || !this._canDrag(node)) {
+      event.preventDefault();
+      return;
+    }
+    this._closeTooltip();
+    this._draggedKey = node.item.key;
+    if (event.dataTransfer) {
+      event.dataTransfer.effectAllowed = 'move';
+      // Some browsers only drag with data set
+      event.dataTransfer.setData('text/plain', node.item.label);
+    }
+  }
+
+  /** Accepts the drop where the dragged item can go, and shows where. */
+  private _onDragOver(event: DragEvent): void {
+    const dragged = this._draggedKey === null ? undefined : this._nodes.get(this._draggedKey);
+    const target = this._eventNode(event);
+    const element = (event.target as HTMLElement).closest<HTMLElement>('[role="treeitem"]');
+    if (!dragged || !target || !element || !this._canDrop(dragged, target)) {
+      this._dropTarget = null;
+      return;
+    }
+    event.preventDefault();
+    if (event.dataTransfer) {
+      event.dataTransfer.dropEffect = 'move';
+    }
+    const location = this._dropLocation(event, element);
+    if (this._dropTarget?.key !== target.item.key || this._dropTarget.location !== location) {
+      this._dropTarget = { key: target.item.key, location };
+    }
+  }
+
+  private _onDrop(event: DragEvent): void {
+    const dragged = this._draggedKey === null ? undefined : this._nodes.get(this._draggedKey);
+    const target = this._eventNode(event);
+    const element = (event.target as HTMLElement).closest<HTMLElement>('[role="treeitem"]');
+    if (dragged && target && element && this._canDrop(dragged, target)) {
+      event.preventDefault();
+      this.$server?.drop(dragged.item.key, target.item.key, this._dropLocation(event, element));
+    }
+    this._dropTarget = null;
+  }
+
+  private _onDragEnd(): void {
+    this._draggedKey = null;
+    this._dropTarget = null;
+  }
+
+  /**
+   * Ctrl+X (or Cmd+X) cuts the focused item, saying how to move it; Ctrl+V pastes it
+   * into the focused item, Ctrl+Shift+V before it. Tells whether it handled the key:
+   * not when there is nothing to cut or paste, so that the page can have it.
+   */
+  private _onCutOrPaste(event: KeyboardEvent, node: Node): boolean {
+    if (!(event.ctrlKey || event.metaKey) || event.altKey) {
+      return false;
+    }
+    const key = event.key.toLowerCase();
+    if (key === 'x' && !event.shiftKey && this._canDrag(node)) {
+      this._cutKey = node.item.key;
+      announce(this.i18n.cut.replace('{0}', node.item.label));
+      return true;
+    }
+    const cut = this._cutKey === null ? undefined : this._nodes.get(this._cutKey);
+    if (key === 'v' && cut) {
+      if (this._canDrag(cut) && this._canDrop(cut, node)) {
+        this.$server?.drop(cut.item.key, node.item.key, event.shiftKey ? 'BEFORE' : 'INTO');
+        this._cutKey = null;
+      }
+      return true;
+    }
+    return false;
+  }
+
   /** Double-clicking an editable item, not its toggle, edits its label. */
   private _onDoubleClick(event: MouseEvent): void {
     const node = this._eventNode(event);
@@ -1402,7 +1563,21 @@ export class TfvTree extends LitElement {
 
   private _onKeyDown(event: KeyboardEvent): void {
     const node = this._eventNode(event);
-    if (!node || this.disabled || event.altKey || event.ctrlKey || event.metaKey || this._isEditor(event)) {
+    if (!node || this.disabled || this._isEditor(event)) {
+      return;
+    }
+    if (this._onCutOrPaste(event, node)) {
+      event.preventDefault();
+      return;
+    }
+    if (event.altKey || event.ctrlKey || event.metaKey) {
+      return;
+    }
+    if (event.key === 'Escape' && this._cutKey !== null) {
+      // Cancelling the cut is all Escape does, so that it does not also close a dialog
+      this._cutKey = null;
+      event.preventDefault();
+      event.stopPropagation();
       return;
     }
     if (event.key === 'Escape') {

@@ -67,7 +67,9 @@ import com.vaadin.flow.shared.Registration;
  * can be disabled with {@link #setItemEnabledProvider}: the user can focus and
  * expand them, but not select them. {@link #addContextMenu()} adds a context
  * menu for the items. The user can edit the labels of the items
- * {@link #setItemEditableProvider} allows, firing an {@link EditEvent}.
+ * {@link #setItemEditableProvider} allows, firing an {@link EditEvent}, and
+ * drag the items {@link #setItemDraggableProvider} allows, firing a
+ * {@link DropEvent}.
  * <p>
  * When the data changes, {@link HierarchicalDataProvider#refreshAll()} has the
  * browser fetch the items again: items that still exist, by their id, stay
@@ -120,13 +122,14 @@ public class Tree<T> extends Component
      * its icon and tooltip if any, whether it has child items, whether it is
      * expanded, whether it is the selected item, whether it is on the
      * selection path, whether it is disabled, whether the user can edit its
-     * label, and in checkbox selection mode whether it is checked:
+     * label, in checkbox selection mode whether it is checked:
      * {@code "true"}, {@code "false"} or {@code "mixed"}, or {@code null} in
-     * single selection mode.
+     * single selection mode, whether the user can drag it and whether the
+     * user can drop items on it.
      */
     record TreeItem(String key, String label, String icon, String tooltip, boolean expandable, boolean expanded,
-            boolean selected, boolean onSelectionPath, boolean disabled, boolean editable, String checked)
-            implements Serializable {
+            boolean selected, boolean onSelectionPath, boolean disabled, boolean editable, String checked,
+            boolean draggable, boolean droppable) implements Serializable {
     }
 
     /** A page of child items, with the number of children the parent has in all. */
@@ -140,6 +143,8 @@ public class Tree<T> extends Component
     private SerializableFunction<T, String> itemTooltipGenerator = item -> null;
     private SerializablePredicate<T> itemEnabledProvider = item -> true;
     private SerializablePredicate<T> itemEditableProvider = item -> false;
+    private SerializablePredicate<T> itemDraggableProvider = item -> false;
+    private SerializablePredicate<T> itemDroppableProvider = item -> true;
     private Registration dataProviderListener;
     /** The ids of the expanded items, kept across refreshes. */
     private final Set<Object> expandedIds = new HashSet<>();
@@ -351,6 +356,69 @@ public class Tree<T> extends Component
     @SuppressWarnings({ "unchecked", "rawtypes" })
     public Registration addEditListener(ComponentEventListener<EditEvent<T>> listener) {
         return addListener(EditEvent.class, (ComponentEventListener) listener);
+    }
+
+    /**
+     * Sets which items the user can move: drag with the mouse and drop before,
+     * after or into another item, or cut with Ctrl+X and paste into the
+     * focused item with Ctrl+V, or before it with Ctrl+Shift+V. Dropping fires
+     * a {@link DropEvent}; the tree moves nothing itself, so move the item in
+     * the data and refresh the data provider. An item is never dropped on
+     * itself nor into its own descendants. Disabled items, and any item while
+     * the selection is read-only, cannot be moved. By default no item can.
+     *
+     * @param itemDraggableProvider
+     *            tells whether the user can move an item; not {@code null}
+     * @see #setItemDroppableProvider
+     * @see #addDropListener
+     */
+    public void setItemDraggableProvider(SerializablePredicate<T> itemDraggableProvider) {
+        this.itemDraggableProvider = Objects.requireNonNull(itemDraggableProvider, "itemDraggableProvider");
+        refresh();
+    }
+
+    /**
+     * Gets which items the user can move.
+     *
+     * @return the item draggable provider, never {@code null}
+     */
+    public SerializablePredicate<T> getItemDraggableProvider() {
+        return itemDraggableProvider;
+    }
+
+    /**
+     * Sets which items the user can drop items on: before, after or into. By
+     * default every item takes drops.
+     *
+     * @param itemDroppableProvider
+     *            tells whether the user can drop items on an item; not
+     *            {@code null}
+     */
+    public void setItemDroppableProvider(SerializablePredicate<T> itemDroppableProvider) {
+        this.itemDroppableProvider = Objects.requireNonNull(itemDroppableProvider, "itemDroppableProvider");
+        refresh();
+    }
+
+    /**
+     * Gets which items the user can drop items on.
+     *
+     * @return the item droppable provider, never {@code null}
+     */
+    public SerializablePredicate<T> getItemDroppableProvider() {
+        return itemDroppableProvider;
+    }
+
+    /**
+     * Listens to items being dropped by the user.
+     *
+     * @param listener
+     *            the listener, not {@code null}
+     * @return a handle to stop listening
+     * @see #setItemDraggableProvider
+     */
+    @SuppressWarnings({ "unchecked", "rawtypes" })
+    public Registration addDropListener(ComponentEventListener<DropEvent<T>> listener) {
+        return addListener(DropEvent.class, (ComponentEventListener) listener);
     }
 
     /**
@@ -877,6 +945,50 @@ public class Tree<T> extends Component
         }
     }
 
+    /**
+     * Drops an item on another, as the user did in the browser: fires a
+     * {@link DropEvent} if the user can move the dragged item there.
+     *
+     * @param draggedKey
+     *            the key of the item dropped
+     * @param targetKey
+     *            the key of the item it was dropped on
+     * @param location
+     *            the name of a {@link DropLocation}
+     */
+    @ClientCallable
+    void drop(String draggedKey, String targetKey, String location) {
+        T dragged = keyMapper.get(draggedKey);
+        T target = keyMapper.get(targetKey);
+        DropLocation dropLocation = Arrays.stream(DropLocation.values())
+                .filter(value -> value.name().equals(location)).findFirst().orElse(null);
+        if (dragged == null || target == null || dropLocation == null || selectionReadOnly()
+                || !itemDraggableProvider.test(dragged) || !itemEnabledProvider.test(dragged)
+                || !itemDroppableProvider.test(target) || isSelfOrDescendant(target, dragged)) {
+            return;
+        }
+        fireEvent(new DropEvent<>(this, true, dragged, target, dropLocation));
+    }
+
+    /** Whether the selection, single or checked, is read-only: they share the element's property. */
+    private boolean selectionReadOnly() {
+        return singleSelect.isReadOnly();
+    }
+
+    /** Whether the item is the other one or one of its descendants, as far as the data provider can tell. */
+    private boolean isSelfOrDescendant(T item, T other) {
+        Object otherId = dataProvider.getId(other);
+        if (dataProvider.getId(item).equals(otherId)) {
+            return true;
+        }
+        try {
+            return ancestors(item).stream().anyMatch(ancestor -> dataProvider.getId(ancestor).equals(otherId));
+        } catch (UnsupportedOperationException e) {
+            // Without getParent, the browser's check of the items it has fetched stands
+            return false;
+        }
+    }
+
     private void setExpanded(Collection<T> items, boolean expanded, boolean fromClient) {
         List<T> changed = new ArrayList<>();
         for (T item : items) {
@@ -978,7 +1090,8 @@ public class Tree<T> extends Component
         return new TreeItem(keyMapper.key(item), itemLabelGenerator.apply(item), itemIconGenerator.apply(item),
                 itemTooltipGenerator.apply(item), hasChildren(item), isExpanded(item),
                 Objects.equals(id, idOf(selectedItem)), selectionPathIds.contains(id), !itemEnabledProvider.test(item),
-                itemEditableProvider.test(item), checked);
+                itemEditableProvider.test(item), checked, itemDraggableProvider.test(item),
+                itemDroppableProvider.test(item));
     }
 
     /**

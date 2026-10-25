@@ -38,6 +38,11 @@ type FakeServer = TreeServer & {
   checked: Record<string, 'true' | 'mixed'>;
   /** The setChecked calls made, as [key, checked]. */
   checks: unknown[][];
+  /** The labels of the items the user can drag, and of those that take no drops. */
+  draggable: string[];
+  undroppable: string[];
+  /** The drop calls made, as [draggedKey, targetKey, location]. */
+  drops: string[][];
   /** The keys of the parents whose child items fail to load, null for the root items. */
   failing: (string | null)[];
   /** While true, fetches wait until release() is called. */
@@ -76,6 +81,9 @@ function serverWith(roots: FakeItem[]): FakeServer {
     checkboxes: false,
     checked: {},
     checks: [],
+    draggable: [],
+    undroppable: [],
+    drops: [],
     failing: [],
     hold: false,
     release() {
@@ -101,6 +109,8 @@ function serverWith(roots: FakeItem[]): FakeServer {
           disabled: server.disabled.includes(label),
           editable: server.editable.includes(label),
           checked: server.checkboxes ? (server.checked[label] ?? 'false') : null,
+          draggable: server.draggable.includes(label),
+          droppable: !server.undroppable.includes(label),
           selected: key === server.selectedKey,
           onSelectionPath: server.selectionPath.includes(key),
         };
@@ -121,6 +131,9 @@ function serverWith(roots: FakeItem[]): FakeServer {
     },
     setChecked(key, checked) {
       server.checks.push([key, checked]);
+    },
+    drop(draggedKey, targetKey, location) {
+      server.drops.push([draggedKey, targetKey, location]);
     },
   };
   return server;
@@ -991,6 +1004,158 @@ describe('tfv-tree', () => {
     });
   });
 
+  describe('drag and drop', () => {
+    /** Dispatches a drag event on an element, at a fraction of its height from the top; tells whether it was prevented. */
+    function drag(type: string, target: Element, fraction = 0.5): boolean {
+      const { x, y, height } = target.getBoundingClientRect();
+      const event = new DragEvent(type, {
+        bubbles: true,
+        composed: true,
+        cancelable: true,
+        dataTransfer: new DataTransfer(),
+        clientX: x + 5,
+        clientY: y + height * fraction,
+      });
+      target.dispatchEvent(event);
+      return event.defaultPrevented;
+    }
+
+    function dropState(tree: TfvTree, label: string): string[] {
+      return ['drop-before', 'drop-into', 'drop-after', 'dragged', 'cut'].filter((name) =>
+        item(tree, label).hasAttribute(name),
+      );
+    }
+
+    /** Waits for Vaadin's live region to say the given text politely. */
+    async function announcedPolitely(text: string): Promise<void> {
+      await waitUntil(
+        () => Array.from(document.body.children).some((e) => e.getAttribute('aria-live') === 'polite' && e.textContent === text),
+        `"${text}" announced`,
+      );
+    }
+
+    async function draggableTree(): Promise<{ tree: TfvTree; server: FakeServer }> {
+      const server = serverWith(FOLDERS);
+      server.draggable = ['Documents', 'Music', 'Pictures'];
+      const tree = await treeWith(server);
+      return { tree, server };
+    }
+
+    it('lets the user drag the draggable items, not while disabled or read-only', async () => {
+      const server = serverWith(FOLDERS);
+      server.draggable = ['Music'];
+      const tree = await treeWith(server);
+
+      expect(item(tree, 'Music').getAttribute('draggable')).to.equal('true');
+      expect(item(tree, 'Documents').hasAttribute('draggable')).to.be.false;
+      expect(drag('dragstart', item(tree, 'Documents'))).to.be.true;
+
+      tree.readonly = true;
+      await tree.updateComplete;
+      expect(item(tree, 'Music').hasAttribute('draggable')).to.be.false;
+    });
+
+    it('drops an item before, into or after another by where the pointer is over it, showing where', async () => {
+      const { tree, server } = await draggableTree();
+      const pictures = item(tree, 'Pictures');
+
+      drag('dragstart', item(tree, 'Music'));
+      await tree.updateComplete;
+      expect(dropState(tree, 'Music')).to.deep.equal(['dragged']);
+
+      for (const [fraction, state] of [
+        [0.1, 'drop-before'],
+        [0.5, 'drop-into'],
+        [0.9, 'drop-after'],
+      ] as const) {
+        expect(drag('dragover', pictures, fraction), state).to.be.true;
+        await tree.updateComplete;
+        expect(dropState(tree, 'Pictures')).to.deep.equal([state]);
+        expect(item(tree, 'Pictures').getAttribute('part')).to.equal(`item ${state}`);
+      }
+
+      drag('drop', pictures, 0.9);
+      drag('dragend', item(tree, 'Music'));
+      await tree.updateComplete;
+
+      expect(server.drops).to.deep.equal([['1', '2', 'AFTER']]);
+      expect(dropState(tree, 'Pictures')).to.be.empty;
+      expect(dropState(tree, 'Music')).to.be.empty;
+    });
+
+    it('refuses a drop on the dragged item, into its descendants, or on an item that takes no drops', async () => {
+      const server = serverWith(FOLDERS);
+      server.draggable = ['Documents'];
+      server.undroppable = ['Music'];
+      const tree = await treeWith(server);
+      await clickToggle(tree, 'Documents');
+
+      drag('dragstart', item(tree, 'Documents'));
+      expect(drag('dragover', item(tree, 'Documents'))).to.be.false;
+      expect(drag('dragover', item(tree, 'Letters'), 0.1)).to.be.false;
+      expect(drag('dragover', item(tree, 'Music'))).to.be.false;
+      expect(drag('dragover', item(tree, 'Pictures'))).to.be.true;
+      drag('drop', item(tree, 'Music'));
+
+      expect(server.drops).to.be.empty;
+    });
+
+    it('cuts the focused item on Ctrl+X, saying so, and moves it on Ctrl+V into, Ctrl+Shift+V before the focused item', async () => {
+      const { tree, server } = await draggableTree();
+      item(tree, 'Music').focus();
+
+      await sendKeys({ press: 'Control+x' });
+      await tree.updateComplete;
+      expect(dropState(tree, 'Music')).to.deep.equal(['cut']);
+      await announcedPolitely(DEFAULT_I18N.cut.replace('{0}', 'Music'));
+
+      await sendKeys({ press: 'ArrowDown' });
+      await sendKeys({ press: 'Control+v' });
+      await tree.updateComplete;
+      expect(server.drops).to.deep.equal([['1', '2', 'INTO']]);
+      expect(dropState(tree, 'Music')).to.be.empty;
+
+      item(tree, 'Documents').focus();
+      await sendKeys({ press: 'Meta+x' });
+      await sendKeys({ press: 'ArrowDown' });
+      await sendKeys({ press: 'Control+Shift+V' });
+      expect(server.drops).to.deep.equal([
+        ['1', '2', 'INTO'],
+        ['0', '1', 'BEFORE'],
+      ]);
+    });
+
+    it('cancels a cut on Escape, and pastes nothing where the item cannot go', async () => {
+      const { tree, server } = await draggableTree();
+      item(tree, 'Music').focus();
+      await sendKeys({ press: 'Control+x' });
+
+      await sendKeys({ press: 'Control+v' });
+      await sendKeys({ press: 'Escape' });
+      await tree.updateComplete;
+      expect(dropState(tree, 'Music')).to.be.empty;
+      await sendKeys({ press: 'ArrowDown' });
+      await sendKeys({ press: 'Control+v' });
+
+      expect(server.drops).to.be.empty;
+    });
+
+    it('leaves Ctrl+X and Ctrl+V alone when there is nothing to cut or paste', async () => {
+      const server = serverWith(FOLDERS);
+      const tree = await treeWith(server);
+      item(tree, 'Music').focus();
+
+      for (const key of ['x', 'v']) {
+        const event = new KeyboardEvent('keydown', { key, ctrlKey: true, bubbles: true, composed: true, cancelable: true });
+        item(tree, 'Music').dispatchEvent(event);
+        expect(event.defaultPrevented, key).to.be.false;
+      }
+      await tree.updateComplete;
+
+      expect(dropState(tree, 'Music')).to.be.empty;
+    });
+  });
+
   describe('checkbox selection', () => {
     function checkState(tree: TfvTree): Record<string, string | null> {
       return Object.fromEntries(treeItems(tree).map((element) => [element.textContent!.trim(), element.getAttribute('aria-checked')]));
@@ -1563,7 +1728,16 @@ describe('tfv-tree', () => {
 
       const letters = { key: '0/1', label: 'Mail', icon: null, tooltip: null, expandable: true, expanded: true };
       tree.refreshItem(
-        { ...letters, selected: false, onSelectionPath: false, disabled: false, editable: false, checked: null },
+        {
+          ...letters,
+          selected: false,
+          onSelectionPath: false,
+          disabled: false,
+          editable: false,
+          checked: null,
+          draggable: false,
+          droppable: true,
+        },
         true,
       );
       await settle(tree);
@@ -1582,6 +1756,7 @@ describe('tfv-tree', () => {
           loadError: 'Lataus epäonnistui',
           selectionPath: 'Sisältää valitun kohteen',
           editor: 'Nimi',
+          cut: '{0} leikattu',
         };
       });
       tree.setSelection(null, '0');
