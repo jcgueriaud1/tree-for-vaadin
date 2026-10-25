@@ -1899,6 +1899,141 @@ describe('tfv-tree', () => {
     });
   });
 
+  describe('virtual scrolling', () => {
+    const LONG: FakeItem[] = [
+      ['Group', Array.from({ length: 40 }, (_, i) => `Child ${i + 1}`), true],
+      ...Array.from({ length: 300 }, (_, i) => `Item ${i + 1}`),
+    ];
+
+    /** A tree of 341 visible items, all fetched at once, in a 200px box; past 100 items only the rows in view render. */
+    async function longTree(server: FakeServer = serverWith(LONG), setUp: (tree: TfvTree) => void = () => {}) {
+      return treeWith(server, (tree) => {
+        tree.pageSize = 500;
+        tree.virtualScrollingThreshold = 100;
+        tree.style.height = '200px';
+        setUp(tree);
+      });
+    }
+
+    function rowHeight(tree: TfvTree): number {
+      return treeItems(tree)[0].getBoundingClientRect().height;
+    }
+
+    async function scrollTo(tree: TfvTree, top: number): Promise<void> {
+      tree.scrollTop = top;
+      await waitUntil(() => tree.scrollTop === top, 'scrolled');
+      await settle(tree);
+    }
+
+    /** Whether the item is in the tree's box, at least in part. */
+    function inView(tree: TfvTree, element: Element): boolean {
+      const box = tree.getBoundingClientRect();
+      const { top, bottom } = element.getBoundingClientRect();
+      return bottom > box.top && top < box.bottom;
+    }
+
+    it('renders only the rows near the view, with the scroll height of all of them', async () => {
+      const tree = await longTree();
+
+      const rendered = labels(tree);
+      expect(rendered[0]).to.equal('Group');
+      expect(rendered.length).to.be.below(60);
+      expect(tree.scrollHeight).to.be.closeTo(341 * rowHeight(tree), 2);
+      expect(item(tree, 'Child 3').getAttribute('aria-posinset')).to.equal('3', 'positions are in the whole level');
+      expect(item(tree, 'Child 3').getAttribute('aria-setsize')).to.equal('40');
+    });
+
+    it('renders every item up to the threshold', async () => {
+      const tree = await longTree(serverWith(LONG), (tree) => (tree.virtualScrollingThreshold = 341));
+
+      expect(treeItems(tree).length).to.equal(341);
+    });
+
+    it('renders the rows scrolled to, each where it would be with every row rendered', async () => {
+      const tree = await longTree();
+      const height = rowHeight(tree);
+
+      await scrollTo(tree, 200 * height);
+
+      // Item 160 is the 201st row: Group, its 40 children, then items 1 to 159 before it
+      const target = item(tree, 'Item 160');
+      expect(target.getBoundingClientRect().top - tree.getBoundingClientRect().top).to.be.closeTo(0, 2);
+      expect(labels(tree)).to.include('Group', 'the item in the tab order stays rendered');
+      expect(labels(tree)).not.to.include('Child 1');
+      expect(labels(tree)).not.to.include('Item 300');
+    });
+
+    it('moves focus to items not rendered yet, and scrolls to them', async () => {
+      const tree = await longTree();
+      item(tree, 'Group').focus();
+
+      await sendKeys({ press: 'End' });
+      await settle(tree);
+      expect(tree.shadowRoot!.activeElement!.textContent!.trim()).to.equal('Item 300');
+      expect(inView(tree, item(tree, 'Item 300'))).to.equal(true);
+
+      await sendKeys({ press: 'Home' });
+      await settle(tree);
+      expect(tree.shadowRoot!.activeElement!.textContent!.trim()).to.equal('Group');
+      expect(inView(tree, item(tree, 'Group'))).to.equal(true);
+    });
+
+    it('finds items not rendered by typing their label', async () => {
+      const tree = await longTree();
+      item(tree, 'Group').focus();
+
+      await sendKeys({ type: 'item 25' });
+      await settle(tree);
+
+      expect(tree.shadowRoot!.activeElement!.textContent!.trim()).to.equal('Item 25');
+    });
+
+    it('keeps the focused item rendered, and in its place, when scrolled out of view', async () => {
+      const tree = await longTree();
+      item(tree, 'Child 2').focus();
+      const top = item(tree, 'Child 2').getBoundingClientRect().top;
+
+      await scrollTo(tree, 250 * rowHeight(tree));
+
+      const focused = tree.shadowRoot!.activeElement as HTMLElement;
+      expect(focused.textContent!.trim()).to.equal('Child 2');
+      expect(focused.getBoundingClientRect().top).to.be.closeTo(top - 250 * rowHeight(tree), 2);
+      expect(labels(tree).filter((label) => label.startsWith('Child'))).to.deep.equal(['Child 2']);
+
+      await sendKeys({ press: 'ArrowDown' });
+      await settle(tree);
+      expect(tree.shadowRoot!.activeElement!.textContent!.trim()).to.equal('Child 3');
+    });
+
+    it('scrolls to an item the server asks for, though not rendered', async () => {
+      const tree = await longTree();
+
+      await tree.scrollToItem('250');
+      await settle(tree);
+
+      expect(inView(tree, item(tree, 'Item 250'))).to.equal(true);
+    });
+
+    it('renders the rows in the window when the page scrolls, not the tree', async () => {
+      const tree = await longTree(serverWith(LONG), (tree) => (tree.style.height = ''));
+
+      expect(tree.scrollHeight).to.be.closeTo(tree.clientHeight, 1);
+      expect(labels(tree).length).to.be.below(120);
+      expect(labels(tree)[0]).to.equal('Group');
+    });
+
+    it('describes only the rendered items by their tooltips', async () => {
+      const server = serverWith(LONG);
+      server.tooltips = { 'Item 1': 'First', 'Item 300': 'Last' };
+      const tree = await longTree(server);
+
+      expect(tree.shadowRoot!.querySelectorAll('[id^="tooltip-"]').length).to.equal(0);
+      await scrollTo(tree, tree.scrollHeight - tree.clientHeight);
+      expect(tree.shadowRoot!.querySelectorAll('[id^="tooltip-"]').length).to.equal(1);
+      expect(item(tree, 'Item 300').getAttribute('aria-describedby')).to.include('tooltip-');
+    });
+  });
+
   describe('styling', () => {
     function stateOf(tree: TfvTree, label: string): string[] {
       return ['focused', 'focus-ring', 'selected', 'selection-path', 'expanded', 'disabled'].filter((name) =>

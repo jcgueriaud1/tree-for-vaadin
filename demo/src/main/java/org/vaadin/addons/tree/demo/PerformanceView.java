@@ -84,6 +84,7 @@ public class PerformanceView extends Main {
     private final IntegerField childCount = sizeField("Child items per item", 10);
     private final IntegerField levels = sizeField("Levels", 3);
     private final IntegerField pageSize = sizeField("Page size", 50);
+    private final IntegerField virtualScrollingThreshold = sizeField("Virtual scrolling past", 2000);
     private final Paragraph size = new Paragraph();
     private final Checkbox checkboxes = new Checkbox("Checkboxes");
     /** No icons, or icons shown as an item icon mode does: see the difference. */
@@ -99,7 +100,10 @@ public class PerformanceView extends Main {
         levels.setMax(10);
         pageSize.setMax(500);
         // The tree always has the shape the fields give
-        for (IntegerField field : new IntegerField[] { rootCount, childCount, levels, pageSize }) {
+        virtualScrollingThreshold.setMin(0);
+        virtualScrollingThreshold.setHelperText("visible items");
+        for (IntegerField field : new IntegerField[] { rootCount, childCount, levels, pageSize,
+                virtualScrollingThreshold }) {
             field.addValueChangeListener(event -> buildTree());
         }
 
@@ -131,7 +135,7 @@ public class PerformanceView extends Main {
         Div log = new Div(results);
         log.getElement().setAttribute("role", "log");
         log.getElement().setAttribute("aria-label", "Results, the latest first");
-        Div shape = new Div(rootCount, childCount, levels, pageSize);
+        Div shape = new Div(rootCount, childCount, levels, pageSize, virtualScrollingThreshold);
         shape.getStyle().set("display", "flex").set("flex-wrap", "wrap").set("gap", "1em");
 
         add(new H1("Tree for Vaadin: performance"), new RouterLink("Back to the demo", TreeView.class),
@@ -180,6 +184,7 @@ public class PerformanceView extends Main {
         tree.setMaxWidth("100%");
         tree.setHeight("25em");
         tree.setPageSize(valueOf(pageSize));
+        tree.setVirtualScrollingThreshold(valueOf(virtualScrollingThreshold));
         tree.setItemLabelGenerator(GeneratedDataProvider.Item::name);
         if (!NO_ICONS.equals(icons.getValue())) {
             tree.setItemIconGenerator(item -> provider.hasChildren(item) ? "vaadin:folder" : "vaadin:file");

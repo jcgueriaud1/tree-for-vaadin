@@ -1,0 +1,9 @@
+# Virtual scrolling above a threshold, with one item height
+
+Rendering every visible item costs about 31 DOM nodes and 2.7 KB of heap per item, and each update renders and diffs all of them: at 11,100 expanded items a key press takes 118 ms, at 55,550 half a second (#16). We render only the rows near the viewport once the tree has more visible items than a threshold (`Tree.setVirtualScrollingThreshold`, 2,000 by default), with spacers standing for the rows out of view so that the scroll height and position stay right. Below the threshold every item stays in the page, so the browser's find in page and a screen reader's reading mode reach all of them. Every item has the same height, as labels never wrap: the tree measures a rendered item, and a loading or message row, and places the other rows from those two heights, with no estimate to correct while scrolling.
+
+The focused item, the item in the tab order, the item being edited, the item dragged and the drop target are always rendered, in their place among the spacers, so that focus, the editor and a drag survive scrolling them out of view. Each item keeps `aria-level`, `aria-posinset` and `aria-setsize`, so assistive technology still knows where it is in the whole tree. We keep our own protocol (ADR-0001): it already fetches a page at a time, and virtual scrolling only changes what the browser renders of what it has.
+
+## Consequences
+
+Above the threshold, find in page and a screen reader's reading mode only reach the rendered items; keyboard navigation, type-ahead and `scrollToItem` reach every item. Items of different heights, such as wrapping labels, would need measuring each item instead. The rows to render are worked out from where the tree is in the window and in its own scroll box, so a tree in another scrolled container renders more rows than it shows, never fewer.

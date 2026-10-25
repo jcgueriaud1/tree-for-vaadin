@@ -121,9 +121,17 @@ tree.setI18n(new TreeI18n().setEmpty("No folders")); // the texts the tree shows
 The tree is rendered as an ARIA `tree` whose **items** are `treeitem`s. The browser fetches them from the
 server a page at a time through the add-on's own protocol ([ADR-0001](docs/adr/0001-own-lazy-loading-protocol.md)):
 the root items first, the **child items** of an item when it is first expanded, and the next page of a level
-when the user scrolls near its end. `setPageSize(int)` sets the page size (default 50). Every item fetched stays in
-the page, with its level and position in its level in `aria-level`, `aria-posinset` and `aria-setsize`; while a
-level is being fetched, its parent (or the tree, for the root items) is `aria-busy`.
+when the user scrolls near its end. `setPageSize(int)` sets the page size (default 50). Each item has its level and
+position in its level in `aria-level`, `aria-posinset` and `aria-setsize`; while a level is being fetched, its
+parent (or the tree, for the root items) is `aria-busy`.
+
+Up to 2,000 visible items, every item fetched stays in the page. Past that, the tree uses **virtual scrolling**
+([ADR-0003](docs/adr/0003-virtual-scrolling-above-a-threshold.md)): it renders only the items near the view, and
+the focused one, so that a key press stays quick with a hundred thousand items expanded. Keyboard navigation,
+type-ahead and `scrollToItem` still reach every item, but the browser's find in page and a screen reader's reading
+mode only reach the items rendered. `setVirtualScrollingThreshold(int)` moves the threshold: `0` always uses
+virtual scrolling, `Integer.MAX_VALUE` never does. Virtual scrolling expects every item to be as high as the others,
+as they are unless styled otherwise.
 
 Expanding an item does not expand its ancestors: its child items show once they are all expanded too.
 

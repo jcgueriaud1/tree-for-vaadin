@@ -106,6 +106,9 @@ public class Tree<T> extends Component
     /** How many items the browser fetches at once, unless set otherwise. */
     static final int DEFAULT_PAGE_SIZE = 50;
 
+    /** How many visible items the browser renders all of, unless set otherwise. */
+    static final int DEFAULT_VIRTUAL_SCROLLING_THRESHOLD = 2000;
+
     /** How the user selects items. */
     public enum SelectionMode {
         /** The user selects one item at a time, the value of {@link Tree#asSingleSelect()}. */
@@ -170,6 +173,7 @@ public class Tree<T> extends Component
     /** The ids of the expanded items, kept across refreshes. */
     private final Set<Object> expandedIds = new HashSet<>();
     private int pageSize;
+    private int virtualScrollingThreshold;
     private SelectionMode selectionMode = SelectionMode.SINGLE;
     private final SingleSelect<Tree<T>, T> singleSelect = new TreeSingleSelect();
     private T selectedItem;
@@ -204,6 +208,7 @@ public class Tree<T> extends Component
     public Tree() {
         keyMapper.setIdentifierGetter(dataProvider::getId);
         setPageSize(DEFAULT_PAGE_SIZE);
+        setVirtualScrollingThreshold(DEFAULT_VIRTUAL_SCROLLING_THRESHOLD);
         setItemIconMode(ItemIconMode.SVG);
     }
 
@@ -599,6 +604,38 @@ public class Tree<T> extends Component
      */
     public int getPageSize() {
         return pageSize;
+    }
+
+    /**
+     * Sets how many visible items the browser renders all of. With more, it
+     * renders only the items near the view, and the focused one, which keeps
+     * large expanded trees fast: keyboard navigation, type-ahead and
+     * {@link #scrollToItem} still reach every item, and each item still tells
+     * assistive technology its position, but the browser's find in page and a
+     * screen reader's reading mode only reach the items rendered. Every item
+     * is expected to be as high as the others. The default is
+     * {@value #DEFAULT_VIRTUAL_SCROLLING_THRESHOLD}; 0 always renders only the
+     * items near the view, {@link Integer#MAX_VALUE} always renders all.
+     *
+     * @param virtualScrollingThreshold
+     *            the number of visible items, 0 or more
+     */
+    public void setVirtualScrollingThreshold(int virtualScrollingThreshold) {
+        if (virtualScrollingThreshold < 0) {
+            throw new IllegalArgumentException(
+                    "virtualScrollingThreshold must be 0 or more: " + virtualScrollingThreshold);
+        }
+        this.virtualScrollingThreshold = virtualScrollingThreshold;
+        getElement().setProperty("virtualScrollingThreshold", virtualScrollingThreshold);
+    }
+
+    /**
+     * Gets how many visible items the browser renders all of.
+     *
+     * @return the number of visible items
+     */
+    public int getVirtualScrollingThreshold() {
+        return virtualScrollingThreshold;
     }
 
     /**

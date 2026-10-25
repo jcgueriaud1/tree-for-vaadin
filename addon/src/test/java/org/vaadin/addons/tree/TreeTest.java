@@ -600,6 +600,18 @@ class TreeTest extends BrowserlessTest {
     }
 
     @Test
+    void virtualScrollingStartsPastTwoThousandVisibleItemsUnlessSet() {
+        assertEquals(2000, tree.getVirtualScrollingThreshold());
+        assertEquals(2000, tree.getElement().getProperty("virtualScrollingThreshold", 0));
+
+        tree.setVirtualScrollingThreshold(0);
+
+        assertEquals(0, tree.getVirtualScrollingThreshold());
+        assertEquals(0, tree.getElement().getProperty("virtualScrollingThreshold", -1));
+        assertThrows(IllegalArgumentException.class, () -> tree.setVirtualScrollingThreshold(-1));
+    }
+
+    @Test
     void thePageSizeIsFiftyUnlessSet() {
         assertEquals(50, tree.getPageSize());
         assertEquals(50, tree.getElement().getProperty("pageSize", 0));

@@ -1,6 +1,7 @@
 package org.vaadin.addons.tree.demo;
 
 import static com.microsoft.playwright.assertions.PlaywrightAssertions.assertThat;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.util.regex.Pattern;
 
@@ -70,6 +71,24 @@ class PerformanceViewIT {
         Locator result = page.getByRole(AriaRole.LOG).getByRole(AriaRole.LISTITEM).first();
         assertThat(result).hasText(Pattern.compile("^Expanded all: ready in [\\d,]+ ms \\(server [\\d,]+ ms\\),"
                 + " 555 items in the page \\(555 items, page size 50\\)$"));
+        TreeViewIT.assertNoAccessibilityViolations(page);
+    }
+
+    @Test
+    void aLargeExpandedTreeRendersOnlyTheItemsNearTheViewYetReachesEveryOne() {
+        page.getByRole(AriaRole.BUTTON, new Page.GetByRoleOptions().setName("Expand all")).click();
+        assertThat(page.getByRole(AriaRole.LOG).getByRole(AriaRole.LISTITEM).first())
+                .hasText(Pattern.compile("^Expanded all: .*"));
+
+        Locator items = tree().getByRole(AriaRole.TREEITEM);
+        assertTrue(items.count() < 200, "rendered " + items.count() + " of 5,550 items");
+        items.first().focus();
+        page.keyboard().press("End");
+
+        Locator last = tree().locator("[role=treeitem]:focus");
+        assertThat(last).hasText("Item 50.10.10");
+        assertThat(last).isInViewport();
+        assertThat(last).hasAttribute("aria-posinset", "10");
         TreeViewIT.assertNoAccessibilityViolations(page);
     }
 
