@@ -11,7 +11,7 @@ import java.util.Objects;
  * <pre>{@code
  * tree.setI18n(new TreeI18n().setLoading("Ladataan…").setEmpty("Ei kohteita")
  *         .setLoadError("Kohteiden lataus epäonnistui")
- *         .setSelectionPath("Sisältää valitun kohteen"));
+ *         .setSelectionPath("Sisältää valitun kohteen").setEditor("Nimi"));
  * }</pre>
  */
 public class TreeI18n implements Serializable {
@@ -20,6 +20,7 @@ public class TreeI18n implements Serializable {
     private String empty = "No items";
     private String loadError = "Could not load the items";
     private String selectionPath = "Contains the selected item";
+    private String editor = "Label";
 
     /**
      * Gets the text shown while items are being fetched.
@@ -108,6 +109,29 @@ public class TreeI18n implements Serializable {
      */
     public TreeI18n setSelectionPath(String selectionPath) {
         this.selectionPath = Objects.requireNonNull(selectionPath, "selectionPath");
+        return this;
+    }
+
+    /**
+     * Gets the accessible name of the text field that edits the label of an
+     * item.
+     *
+     * @return the editor text, never {@code null}
+     */
+    public String getEditor() {
+        return editor;
+    }
+
+    /**
+     * Sets the accessible name of the text field that edits the label of an
+     * item, see {@link Tree#setItemEditableProvider}. It is not shown.
+     *
+     * @param editor
+     *            the editor text, not {@code null}
+     * @return this object, for chaining
+     */
+    public TreeI18n setEditor(String editor) {
+        this.editor = Objects.requireNonNull(editor, "editor");
         return this;
     }
 }
