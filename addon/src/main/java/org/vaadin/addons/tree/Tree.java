@@ -118,6 +118,23 @@ public class Tree<T> extends Component
         CHECKBOX
     }
 
+    /** How item icons are shown; see {@link Tree#setItemIconMode}. */
+    public enum ItemIconMode {
+        /**
+         * Each icon is drawn once, as an SVG symbol, and each item showing it
+         * refers to it: much faster for many items.
+         */
+        SVG("svg"),
+        /** Each item showing an icon has its own {@code <vaadin-icon>}. */
+        VAADIN_ICON("vaadin-icon");
+
+        private final String clientName;
+
+        ItemIconMode(String clientName) {
+            this.clientName = clientName;
+        }
+    }
+
     /**
      * An item as the browser sees it: the key it refers to it by, its label,
      * its icon and tooltip if any, whether it has child items, whether it is
@@ -141,6 +158,7 @@ public class Tree<T> extends Component
     private HierarchicalDataProvider<T, ?> dataProvider = new TreeDataProvider<>(new TreeData<>());
     private ItemLabelGenerator<T> itemLabelGenerator = String::valueOf;
     private SerializableFunction<T, String> itemIconGenerator = item -> null;
+    private ItemIconMode itemIconMode;
     private SerializableFunction<T, String> itemTooltipGenerator = item -> null;
     private SerializablePredicate<T> itemEnabledProvider = item -> true;
     private SerializablePredicate<T> itemEditableProvider = item -> false;
@@ -186,6 +204,7 @@ public class Tree<T> extends Component
     public Tree() {
         keyMapper.setIdentifierGetter(dataProvider::getId);
         setPageSize(DEFAULT_PAGE_SIZE);
+        setItemIconMode(ItemIconMode.SVG);
     }
 
     /**
@@ -248,8 +267,8 @@ public class Tree<T> extends Component
 
     /**
      * Sets the icon shown in front of each item's label, by its name in an
-     * icon set, such as {@code vaadin:folder}, shown with
-     * {@code <vaadin-icon>}. The {@code vaadin} icon set comes with the tree;
+     * icon set, such as {@code vaadin:folder}, shown as {@link #setItemIconMode}
+     * sets. The {@code vaadin} icon set comes with the tree;
      * other icon sets must be loaded by the app. Icons are
      * decorative: they are hidden from assistive technology, and the label
      * stays the accessible name of the item. By default items have no icon.
@@ -270,6 +289,32 @@ public class Tree<T> extends Component
      */
     public SerializableFunction<T, String> getItemIconGenerator() {
         return itemIconGenerator;
+    }
+
+    /**
+     * Sets how item icons are shown. By default, {@link ItemIconMode#SVG},
+     * each icon is drawn once as an SVG symbol that the items showing it refer
+     * to, which keeps large trees fast; an icon whose icon set is not loaded
+     * yet is shown with {@code <vaadin-icon>} until it is.
+     * {@link ItemIconMode#VAADIN_ICON} gives each item its own
+     * {@code <vaadin-icon>}, for apps that style it as such, at a cost when
+     * many items show an icon.
+     *
+     * @param itemIconMode
+     *            how item icons are shown, not {@code null}
+     */
+    public void setItemIconMode(ItemIconMode itemIconMode) {
+        this.itemIconMode = Objects.requireNonNull(itemIconMode, "itemIconMode");
+        getElement().setProperty("itemIconMode", itemIconMode.clientName);
+    }
+
+    /**
+     * Gets how item icons are shown.
+     *
+     * @return how item icons are shown, never {@code null}
+     */
+    public ItemIconMode getItemIconMode() {
+        return itemIconMode;
     }
 
     /**

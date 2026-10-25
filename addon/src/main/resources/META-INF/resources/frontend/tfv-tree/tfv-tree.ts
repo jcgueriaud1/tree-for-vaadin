@@ -1,6 +1,7 @@
-import { css, html, LitElement, nothing, type PropertyValues } from 'lit';
+import { css, html, LitElement, nothing, type PropertyValues, svg } from 'lit';
 import { repeat } from 'lit/directives/repeat.js';
 import { announce } from '@vaadin/a11y-base/src/announce.js';
+import { Iconset } from '@vaadin/icon/src/vaadin-iconset.js';
 
 /**
  * An item as the server sends it: the key to refer to it by, its label, its icon and
@@ -12,7 +13,7 @@ import { announce } from '@vaadin/a11y-base/src/announce.js';
 export interface TreeItem {
   key: string;
   label: string;
-  /** The name of a `<vaadin-icon>`, such as `vaadin:folder`. */
+  /** The name of an icon in a Vaadin icon set, such as `vaadin:folder`. */
   icon: string | null;
   tooltip: string | null;
   expandable: boolean;
@@ -50,6 +51,27 @@ export interface TreeServer {
   setChecked(key: string, checked: boolean): unknown;
   drop(draggedKey: string, targetKey: string, location: DropLocation): unknown;
   cut(key: string | null): unknown;
+}
+
+/**
+ * How item icons are shown: `svg` draws each icon once in the tree, as an SVG symbol
+ * each item showing it refers to; `vaadin-icon` gives each item a `<vaadin-icon>`.
+ */
+export type ItemIconMode = 'svg' | 'vaadin-icon';
+
+/** The static side of Vaadin's icon set, which its type declarations leave out. */
+const Iconsets = Iconset as unknown as {
+  getIconset(name: string): HTMLElement | undefined;
+  getIconSvg(icon: string): { svg: unknown; size?: number; viewBox?: string | null; preserveAspectRatio?: string | null };
+};
+
+/** An icon drawn once in the tree's shadow root, from the icon set it was found in. */
+interface IconSymbol {
+  id: string;
+  iconset: HTMLElement;
+  viewBox: string;
+  preserveAspectRatio: string;
+  shapes: unknown;
 }
 
 /** How many items are fetched at once, unless the server sets `pageSize`. */
@@ -204,8 +226,12 @@ function hasMore(level: Level): boolean {
  * `selection-path` attribute and a `selection-path-marker` part, and are described
  * as containing it, for assistive technology.
  *
- * An item can have an icon, a decorative `<vaadin-icon>` hidden from assistive
- * technology, and a tooltip: one `<vaadin-tooltip>` follows the item hovered or
+ * An item can have an icon, by its name in a Vaadin icon set, decorative and hidden
+ * from assistive technology. By default (`itemIconMode` `svg`) each icon is drawn once,
+ * as an SVG symbol, and the items showing it are an `<svg>` referring to it; an icon
+ * whose icon set is not loaded yet is a `<vaadin-icon>`, which shows it once loaded.
+ * In the `vaadin-icon` mode, every item icon is a `<vaadin-icon>`, for what only it
+ * supports. An item can also have a tooltip: one `<vaadin-tooltip>` follows the item hovered or
  * focused with the keyboard. The tooltip is hidden from assistive technology, as a
  * tree only holds treeitems; its text is the item's `aria-describedby` instead, from a
  * hidden copy, so the item is described whether or not the tooltip shows.
@@ -247,6 +273,7 @@ export class TfvTree extends LitElement {
     disabled: { type: Boolean, reflect: true },
     readonly: { type: Boolean },
     pageSize: { type: Number },
+    itemIconMode: { type: String },
     i18n: { type: Object, attribute: false },
     _focusedKey: { state: true },
     _focusRing: { state: true },
@@ -493,6 +520,16 @@ export class TfvTree extends LitElement {
       width: var(--tfv-tree-icon-size);
       height: var(--tfv-tree-icon-size);
       color: var(--tfv-tree-icon-color);
+      fill: currentColor;
+      /* As vaadin-icon does, for icons drawn past their view box */
+      overflow: visible;
+    }
+
+    #icons {
+      position: absolute;
+      width: 0;
+      height: 0;
+      overflow: hidden;
     }
 
     [part='editor'] {
@@ -580,6 +617,8 @@ export class TfvTree extends LitElement {
   /** Set by the server when the value is read-only: the user cannot change the selection. */
   declare readonly: boolean;
   declare pageSize: number;
+  /** How item icons are shown, set by the server. */
+  declare itemIconMode: ItemIconMode;
   /** The texts the tree shows by itself, set by the server. */
   declare i18n: TreeI18n;
   declare $server?: TreeServer;
@@ -605,6 +644,10 @@ export class TfvTree extends LitElement {
   declare _dropTarget: { key: string; location: DropLocation } | null;
 
   private _root: Level = newLevel(null);
+
+  /** The icons drawn once in the shadow root, by name, in the `svg` icon mode. */
+  private _iconSymbols = new Map<string, IconSymbol>();
+  private _iconSymbolCount = 0;
   private _nodes = new Map<string, Node>();
 
   /** The keys of the collapsed items whose group shows that their child items failed to load. */
@@ -635,6 +678,7 @@ export class TfvTree extends LitElement {
     this.disabled = false;
     this.readonly = false;
     this.pageSize = PAGE_SIZE;
+    this.itemIconMode = 'svg';
     this.i18n = DEFAULT_I18N;
     this._focusedKey = null;
     this._focusRing = false;
@@ -849,6 +893,7 @@ export class TfvTree extends LitElement {
   protected override render() {
     const rows = this._rows();
     const tabbableKey = this._tabbableKey(rows);
+    const symbols = this._iconSymbolsOf(rows);
     return html`
       <div
         role="none"
@@ -892,7 +937,65 @@ export class TfvTree extends LitElement {
       <!-- A tree only holds treeitems: the tooltip is for the eyes, the hidden copies above describe the items -->
       <vaadin-tooltip manual aria-hidden="true" .ariaTarget=${null}></vaadin-tooltip>
       <slot name="tooltip"></slot>
+      ${symbols.length > 0
+        ? html`<svg id="icons" aria-hidden="true">
+            ${symbols.map(
+              (symbol) =>
+                svg`<symbol id=${symbol.id} viewBox=${symbol.viewBox} preserveAspectRatio=${symbol.preserveAspectRatio}>${symbol.shapes}</symbol>`,
+            )}
+          </svg>`
+        : nothing}
     `;
+  }
+
+  /** The symbols of the icons the rows show, drawing those not drawn yet, in the `svg` icon mode. */
+  private _iconSymbolsOf(rows: Row[]): IconSymbol[] {
+    if (this.itemIconMode !== 'svg') {
+      return [];
+    }
+    for (const row of rows) {
+      if (row.kind === 'item' && row.node.item.icon) {
+        this._iconSymbol(row.node.item.icon);
+      }
+    }
+    return [...this._iconSymbols.values()];
+  }
+
+  /**
+   * The symbol of an icon, drawn from its icon set the first time, and again if the
+   * icon set is replaced; `null` while the icon set, or the icon in it, is not loaded.
+   */
+  private _iconSymbol(icon: string): IconSymbol | null {
+    const iconset = Iconsets.getIconset(icon.split(':')[0] || 'vaadin');
+    const drawn = this._iconSymbols.get(icon);
+    if (drawn && drawn.iconset === iconset) {
+      return drawn;
+    }
+    this._iconSymbols.delete(icon);
+    if (!iconset) {
+      return null;
+    }
+    const { svg: shapes, size, viewBox, preserveAspectRatio } = Iconsets.getIconSvg(icon);
+    if (shapes === nothing) {
+      return null;
+    }
+    const symbol: IconSymbol = {
+      id: `icon-${this._iconSymbolCount++}`,
+      iconset,
+      viewBox: viewBox || `0 0 ${size} ${size}`,
+      preserveAspectRatio: preserveAspectRatio || 'xMidYMid meet',
+      shapes,
+    };
+    this._iconSymbols.set(icon, symbol);
+    return symbol;
+  }
+
+  /** An item's icon: an `<svg>` referring to its symbol, or a `<vaadin-icon>`. */
+  private _renderIcon(icon: string) {
+    const symbol = this.itemIconMode === 'svg' ? this._iconSymbol(icon) : null;
+    return symbol
+      ? html`<svg part="icon" aria-hidden="true"><use href="#${symbol.id}"></use></svg>`
+      : html`<vaadin-icon part="icon" icon=${icon} aria-hidden="true"></vaadin-icon>`;
   }
 
   private _renderItem(row: Extract<Row, { kind: 'item' }>, tabbableKey: string | null) {
@@ -960,7 +1063,7 @@ export class TfvTree extends LitElement {
           ? html`<span part="toggle" aria-hidden="true"></span>`
           : html`<span part="toggle-spacer" aria-hidden="true"></span>`}
         ${checkState === null ? nothing : html`<span part="checkbox" aria-hidden="true"></span>`}
-        ${item.icon ? html`<vaadin-icon part="icon" icon=${item.icon} aria-hidden="true"></vaadin-icon>` : nothing}
+        ${item.icon ? this._renderIcon(item.icon) : nothing}
         ${item.key === this._editingKey
           ? html`<input
               part="editor"

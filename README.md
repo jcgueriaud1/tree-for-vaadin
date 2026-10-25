@@ -348,10 +348,19 @@ Item labels and tooltips come from your generators, so translate them there.
 
 ### Icons and tooltips
 
-`setItemIconGenerator` gives each item the name of an icon, such as `vaadin:folder`, shown
-with `<vaadin-icon>` before its label (part `icon`, sized by `--tfv-tree-icon-size`); `null` means no icon.
+`setItemIconGenerator` gives each item the name of an icon, such as `vaadin:folder`, shown before its label
+(part `icon`, sized by `--tfv-tree-icon-size` and colored by `--tfv-tree-icon-color`); `null` means no icon.
 Icons are decorative: they are `aria-hidden`, and the label stays the accessible name of the item. The
 `vaadin:` icons come with the add-on; other icon sets must be loaded by the app.
+
+By default, each icon is drawn once in the tree as an SVG symbol, and each item showing it is a plain `<svg>`
+referring to it: in a large expanded tree, this is several times faster than a `<vaadin-icon>` per item. An icon
+whose icon set is not loaded yet shows as a `<vaadin-icon>` until it is. To have every item icon be a
+`<vaadin-icon>`, as before, for example to style it as one:
+
+```java
+tree.setItemIconMode(Tree.ItemIconMode.VAADIN_ICON);
+```
 
 `setItemTooltipGenerator` gives each item an optional tooltip text; `null` or empty means no tooltip. One
 `<vaadin-tooltip>` follows the item hovered or focused with the keyboard, with the same delays as other Vaadin
@@ -418,7 +427,7 @@ indicator.
 | `item` | An item (the `treeitem`) |
 | `toggle` | The chevron of an item with child items, which expands and collapses it |
 | `toggle-spacer` | Where the chevron would be, on an item without child items |
-| `icon` | The `<vaadin-icon>` of an item |
+| `icon` | The icon of an item: an `<svg>`, or a `<vaadin-icon>` (see `setItemIconMode`) |
 | `label` | The label of an item |
 | `editor` | The text field in place of the label of an item being renamed |
 | `selection-path-marker` | The dot after an ancestor of the selected item |

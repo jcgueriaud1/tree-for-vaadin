@@ -130,6 +130,18 @@ class TreeTest extends BrowserlessTest {
     }
 
     @Test
+    void iconsAreSvgUnlessSetToVaadinIcons() {
+        assertEquals(Tree.ItemIconMode.SVG, tree.getItemIconMode());
+        assertEquals("svg", tree.getElement().getProperty("itemIconMode"));
+
+        tree.setItemIconMode(Tree.ItemIconMode.VAADIN_ICON);
+
+        assertEquals(Tree.ItemIconMode.VAADIN_ICON, tree.getItemIconMode());
+        assertEquals("vaadin-icon", tree.getElement().getProperty("itemIconMode"));
+        assertThrows(NullPointerException.class, () -> tree.setItemIconMode(null));
+    }
+
+    @Test
     void settingAGeneratorHasTheBrowserFetchTheItemsAgain() {
         tree.fetchChildren(null, 0, 50);
         calls("refresh");
