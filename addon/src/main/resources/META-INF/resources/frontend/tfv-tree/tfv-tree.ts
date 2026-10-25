@@ -193,6 +193,18 @@ type Row =
   | { kind: 'loading'; level: Level; depth: number }
   | { kind: 'empty' | 'error'; parentKey: string; depth: number };
 
+/**
+ * The rows, the visible items in tree order, and where each item is among them by key,
+ * kept until the rows change; with the offset of each row once virtual scrolling needs it.
+ */
+interface RowIndex {
+  rows: Row[];
+  items: Node[];
+  itemIndex: Map<string, number>;
+  rowIndex: Map<string, number>;
+  offsets?: { itemHeight: number; messageHeight: number; values: Float64Array };
+}
+
 /** What renders in place of rows out of view, in virtual scrolling: their height, from the index of the first. */
 type Spacer = { kind: 'spacer'; from: number; height: number };
 
@@ -701,6 +713,8 @@ export class TfvTree extends LitElement {
   };
 
   private _root: Level = newLevel(null);
+  /** The rows as last worked out, until they change; see `_rowsChanged`. */
+  private _index?: RowIndex;
 
   /** The icons drawn once in the shadow root, by name, in the `svg` icon mode. */
   private _iconSymbols = new Map<string, IconSymbol>();
@@ -790,6 +804,7 @@ export class TfvTree extends LitElement {
     this._generation++;
     this._root = newLevel(null);
     this._nodes.clear();
+    this._rowsChanged();
     this._clearLoadErrors();
     this._editingKey = null;
     // The items fetched again tell which are selected or checked
@@ -811,6 +826,7 @@ export class TfvTree extends LitElement {
     }
     node.item = item;
     node.expanded = item.expandable && item.expanded;
+    this._rowsChanged();
     this._learnCheckState(node);
     if (refreshChildren || !item.expandable) {
       this._forgetChildren(node);
@@ -906,7 +922,7 @@ export class TfvTree extends LitElement {
   /** Edits the label of an item, if it is shown and editable. Called by the server. */
   editItem(key: string): void {
     const node = this._nodes.get(key);
-    if (node && this._visibleItems().includes(node)) {
+    if (node && this._rowIndex().itemIndex.has(key)) {
       this._startEditing(node);
     }
   }
@@ -1013,21 +1029,13 @@ export class TfvTree extends LitElement {
    * The rows to render: all of them up to the threshold of visible items; past it, the
    * rows near the view and those that must stay rendered, with spacers in between.
    */
-  private _windowOf(rows: Row[], tabbableKey: string | null): (Row | Spacer)[] {
-    let items = 0;
-    for (const row of rows) {
-      if (row.kind === 'item') {
-        items++;
-      }
-    }
-    this._virtual = items > this.virtualScrollingThreshold;
+  private _windowOf(rowIndex: RowIndex, tabbableKey: string | null): (Row | Spacer)[] {
+    const { rows } = rowIndex;
+    this._virtual = rowIndex.items.length > this.virtualScrollingThreshold;
     if (!this._virtual) {
       return rows;
     }
-    const offsets = new Float64Array(rows.length + 1);
-    rows.forEach((row, index) => {
-      offsets[index + 1] = offsets[index] + (row.kind === 'item' ? this._itemHeight : this._messageHeight);
-    });
+    const offsets = this._offsets(rowIndex);
     const { top, bottom } = this._viewport;
     const margin = Math.max(300, bottom - top);
     const shown = new Set<number>();
@@ -1040,9 +1048,10 @@ export class TfvTree extends LitElement {
         (key) => key != null,
       ),
     );
-    rows.forEach((row, index) => {
-      if (row.kind === 'item' && kept.has(row.node.item.key)) {
-        shown.add(index);
+    kept.forEach((key) => {
+      const row = rowIndex.rowIndex.get(key);
+      if (row !== undefined) {
+        shown.add(row);
       }
     });
     const window: (Row | Spacer)[] = [];
@@ -1060,10 +1069,22 @@ export class TfvTree extends LitElement {
     return window;
   }
 
+  /** Where each row starts, and the end of the last, from the heights measured; kept until the rows or heights change. */
+  private _offsets(index: RowIndex): Float64Array {
+    const { _itemHeight: itemHeight, _messageHeight: messageHeight } = this;
+    if (index.offsets?.itemHeight !== itemHeight || index.offsets.messageHeight !== messageHeight) {
+      const values = new Float64Array(index.rows.length + 1);
+      index.rows.forEach((row, i) => {
+        values[i + 1] = values[i] + (row.kind === 'item' ? itemHeight : messageHeight);
+      });
+      index.offsets = { itemHeight, messageHeight, values };
+    }
+    return index.offsets.values;
+  }
+
   protected override render() {
-    const rows = this._rows();
-    const tabbableKey = this._tabbableKey(rows);
-    const shown = this._windowOf(rows, tabbableKey);
+    const tabbableKey = this._tabbableKey();
+    const shown = this._windowOf(this._rowIndex(), tabbableKey);
     const shownRows = shown.filter((row): row is Row => row.kind !== 'spacer');
     const symbols = this._iconSymbolsOf(shownRows);
     return html`
@@ -1303,6 +1324,31 @@ export class TfvTree extends LitElement {
    * loading row if it has more items, or its error row if they failed to load; the
    * empty row if there are no items.
    */
+  /** Forgets the rows as worked out, after a change to which rows there are. */
+  private _rowsChanged(): void {
+    this._index = undefined;
+  }
+
+  /** The rows and where each item is among them, worked out again only after they changed. */
+  private _rowIndex(): RowIndex {
+    if (!this._index) {
+      const rows = this._rows();
+      const items: Node[] = [];
+      const itemIndex = new Map<string, number>();
+      const rowIndex = new Map<string, number>();
+      rows.forEach((row, index) => {
+        if (row.kind === 'item') {
+          itemIndex.set(row.node.item.key, items.length);
+          rowIndex.set(row.node.item.key, index);
+          items.push(row.node);
+        }
+      });
+      this._index = { rows, items, itemIndex, rowIndex };
+    }
+    return this._index;
+  }
+
+  /** Works out the rows: each visible item, then the loading or message rows of its level. */
   private _rows(): Row[] {
     const rows: Row[] = [];
     const addLevel = (level: Level, depth: number) => {
@@ -1327,25 +1373,20 @@ export class TfvTree extends LitElement {
     return rows;
   }
 
-  /** The visible items, in tree order. */
-  private _visibleItems(rows: Row[] = this._rows()): Node[] {
-    return rows.flatMap((row) => (row.kind === 'item' ? [row.node] : []));
-  }
-
   /**
    * The key of the item in the tab order: the focused item if visible, else the
    * selected item if visible, else its deepest visible ancestor (which shows the
    * selection path), else the first item.
    */
-  private _tabbableKey(rows: Row[] = this._rows()): string | null {
-    const keys = this._visibleItems(rows).map((node) => node.item.key);
-    const deepestOnPath = [...keys].reverse().find((key) => this._selectionPath.has(key));
-    return (
-      [this._focusedKey, this._selectedKey].find((key) => key !== null && keys.includes(key)) ??
-      deepestOnPath ??
-      keys[0] ??
-      null
-    );
+  private _tabbableKey(): string | null {
+    const { items, itemIndex } = this._rowIndex();
+    const shown = [this._focusedKey, this._selectedKey].find((key) => key !== null && itemIndex.has(key));
+    if (shown !== undefined) {
+      return shown;
+    }
+    let deepestOnPath = -1;
+    this._selectionPath.forEach((key) => (deepestOnPath = Math.max(deepestOnPath, itemIndex.get(key) ?? -1)));
+    return (items[deepestOnPath] ?? items[0])?.item.key ?? null;
   }
 
   /** Fetches the next page of a level, or waits for the one being fetched. */
@@ -1381,6 +1422,7 @@ export class TfvTree extends LitElement {
       added.filter((node) => node.expanded).forEach((node) => this._fetchChildren(node));
     } finally {
       level.loading = null;
+      this._rowsChanged();
       this.requestUpdate();
     }
   }
@@ -1406,6 +1448,7 @@ export class TfvTree extends LitElement {
     const parent = level.parent;
     if (!parent) {
       level.failed = true;
+      this._rowsChanged();
       return;
     }
     const key = parent.item.key;
@@ -1415,12 +1458,14 @@ export class TfvTree extends LitElement {
     }
     this._forgetChildren(parent);
     this._failedKeys.add(key);
+    this._rowsChanged();
     clearTimeout(this._failedTimeouts.get(key));
     this._failedTimeouts.set(
       key,
       setTimeout(() => {
         this._failedTimeouts.delete(key);
         this._failedKeys.delete(key);
+        this._rowsChanged();
         this.requestUpdate();
       }, LOAD_ERROR_DURATION),
     );
@@ -1431,6 +1476,7 @@ export class TfvTree extends LitElement {
     this._failedTimeouts.forEach((timeout) => clearTimeout(timeout));
     this._failedTimeouts.clear();
     this._failedKeys.clear();
+    this._rowsChanged();
   }
 
   /** Drops the fetched child items of an item and their descendants, moving focus to the item from any of them. */
@@ -1448,6 +1494,7 @@ export class TfvTree extends LitElement {
       });
     forget(node.children);
     node.children = undefined;
+    this._rowsChanged();
   }
 
   /** Fetches pages of a level until the item with the given key is there, if it ever is. */
@@ -1528,6 +1575,7 @@ export class TfvTree extends LitElement {
   private _fetchChildren(node: Node): void {
     if (!node.children) {
       node.children = newLevel(node);
+      this._rowsChanged();
       this._fetchNextPage(node.children);
     }
   }
@@ -1537,6 +1585,7 @@ export class TfvTree extends LitElement {
       return;
     }
     node.expanded = expanded;
+    this._rowsChanged();
     if (expanded) {
       this._failedKeys.delete(node.item.key);
       this._fetchChildren(node);
@@ -1914,8 +1963,8 @@ export class TfvTree extends LitElement {
       }
       return;
     }
-    const visible = this._visibleItems();
-    const index = visible.indexOf(node);
+    const { items: visible, itemIndex } = this._rowIndex();
+    const index = itemIndex.get(node.item.key) ?? -1;
     const rtl = this.matches(':dir(rtl)');
     const forward = rtl ? 'ArrowLeft' : 'ArrowRight';
     const backward = rtl ? 'ArrowRight' : 'ArrowLeft';
@@ -1973,7 +2022,7 @@ export class TfvTree extends LitElement {
    * starts with it: from the focused item on, or after it when only one character, or
    * the same one again and again, was typed, which cycles through the items starting with it.
    */
-  private _typeAhead(character: string, visible: Node[], index: number): Node | undefined {
+  private _typeAhead(character: string, visible: readonly Node[], index: number): Node | undefined {
     clearTimeout(this._typedTimeout);
     this._typedTimeout = setTimeout(() => (this._typed = ''), TYPE_AHEAD_TIMEOUT);
     this._typed += character.toLocaleLowerCase();
