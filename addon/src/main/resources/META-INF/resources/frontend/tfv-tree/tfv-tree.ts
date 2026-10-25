@@ -5,7 +5,8 @@ import { announce } from '@vaadin/a11y-base/src/announce.js';
 /**
  * An item as the server sends it: the key to refer to it by, its label, its icon and
  * tooltip if any, whether it has child items, whether it is expanded, whether it is
- * the selected item, whether it is on the selection path and whether it is disabled.
+ * the selected item, whether it is on the selection path, whether it is disabled and
+ * whether the user can edit its label.
  */
 export interface TreeItem {
   key: string;
@@ -19,6 +20,8 @@ export interface TreeItem {
   onSelectionPath: boolean;
   /** A disabled item can be focused and expanded, but not selected. */
   disabled: boolean;
+  /** Whether the user can edit the label of the item. */
+  editable: boolean;
 }
 
 /** A page of child items, with the number of children the parent has in all. */
@@ -32,6 +35,7 @@ export interface TreeServer {
   fetchChildren(parentKey: string | null, offset: number, limit: number): Promise<ItemPage>;
   setExpanded(expanded: boolean, ...keys: string[]): unknown;
   select(key: string): unknown;
+  edit(key: string, label: string): unknown;
 }
 
 /** How many items are fetched at once, unless the server sets `pageSize`. */
@@ -64,6 +68,8 @@ export interface TreeI18n {
   loadError: string;
   /** The accessible description of each ancestor of the selected item. */
   selectionPath: string;
+  /** The accessible name of the text field that edits the label of an item. */
+  editor: string;
 }
 
 export const DEFAULT_I18N: TreeI18n = {
@@ -71,6 +77,7 @@ export const DEFAULT_I18N: TreeI18n = {
   empty: 'No items',
   loadError: 'Could not load the items',
   selectionPath: 'Contains the selected item',
+  editor: 'Label',
 };
 
 /** The id of the hidden text that describes each ancestor of the selected item. */
@@ -167,6 +174,11 @@ function hasMore(level: Level): boolean {
  * tree only holds treeitems; its text is the item's `aria-describedby` instead, from a
  * hidden copy, so the item is described whether or not the tooltip shows.
  *
+ * The label of an editable item is edited in a text field (part `editor`) in place of
+ * the label: on F2, on double-click, or when the server calls `editItem`. Enter, or
+ * focus leaving the field, saves it with `$server.edit`, which sends the item back
+ * with the label the app gives it; Escape cancels. Either gives focus back to the item.
+ *
  * A Vaadin context menu targeting the tree learns the item it opens on from
  * `getContextMenuBeforeOpenDetail`: the item right-clicked, long-pressed, or focused
  * when Shift+F10 or the Menu key is pressed.
@@ -189,6 +201,7 @@ export class TfvTree extends LitElement {
     _focusRing: { state: true },
     _selectedKey: { state: true },
     _selectionPath: { state: true },
+    _editingKey: { state: true },
   };
 
   /*
@@ -358,6 +371,19 @@ export class TfvTree extends LitElement {
       color: var(--tfv-tree-icon-color);
     }
 
+    [part='editor'] {
+      flex: 1;
+      min-width: 0;
+      margin: 0;
+      padding: 0 var(--tfv-tree-item-gap);
+      font: inherit;
+      color: var(--tfv-tree-text-color);
+      background: var(--lumo-base-color, var(--vaadin-background-color, Field));
+      border: 1px solid var(--tfv-tree-focus-ring-color);
+      border-radius: var(--tfv-tree-item-border-radius);
+      outline: none;
+    }
+
     [part='label'] {
       min-width: 0;
       overflow: hidden;
@@ -426,6 +452,8 @@ export class TfvTree extends LitElement {
   declare _selectedKey: string | null;
   /** The keys of the ancestors of the selected item. */
   declare _selectionPath: ReadonlySet<string>;
+  /** The key of the item whose label is being edited, if any. */
+  declare _editingKey: string | null;
 
   private _root: Level = newLevel(null);
   private _nodes = new Map<string, Node>();
@@ -463,6 +491,7 @@ export class TfvTree extends LitElement {
     this._focusRing = false;
     this._selectedKey = null;
     this._selectionPath = new Set();
+    this._editingKey = null;
   }
 
   override connectedCallback(): void {
@@ -491,6 +520,7 @@ export class TfvTree extends LitElement {
     this._root = newLevel(null);
     this._nodes.clear();
     this._clearLoadErrors();
+    this._editingKey = null;
     // The items fetched again tell which are selected
     this._selectedKey = null;
     this._selectionPath = new Set();
@@ -568,6 +598,14 @@ export class TfvTree extends LitElement {
     }
   }
 
+  /** Edits the label of an item, if it is shown and editable. Called by the server. */
+  editItem(key: string): void {
+    const node = this._nodes.get(key);
+    if (node && this._visibleItems().includes(node)) {
+      this._startEditing(node);
+    }
+  }
+
   /** Focuses the item in the tab order. */
   override focus(options?: FocusOptions): void {
     const item = this._itemElement(this._tabbableKey());
@@ -639,6 +677,7 @@ export class TfvTree extends LitElement {
         @focusin=${this._onFocusIn}
         @focusout=${this._onFocusOut}
         @click=${this._onClick}
+        @dblclick=${this._onDoubleClick}
         @mouseover=${this._onMouseOver}
         @mouseleave=${this._onMouseLeave}
         @mousedown=${this._dismissTooltip}
@@ -721,7 +760,15 @@ export class TfvTree extends LitElement {
           ? html`<span part="toggle" aria-hidden="true"></span>`
           : html`<span part="toggle-spacer" aria-hidden="true"></span>`}
         ${item.icon ? html`<vaadin-icon part="icon" icon=${item.icon} aria-hidden="true"></vaadin-icon>` : nothing}
-        <span part="label">${item.label}</span>
+        ${item.key === this._editingKey
+          ? html`<input
+              part="editor"
+              aria-label=${this.i18n.editor}
+              .value=${item.label}
+              @keydown=${this._onEditorKeyDown}
+              @blur=${this._onEditorBlur}
+            />`
+          : html`<span part="label">${item.label}</span>`}
         ${onSelectionPath ? html`<span part="selection-path-marker" aria-hidden="true"></span>` : nothing}
       </div>
     `;
@@ -1092,13 +1139,85 @@ export class TfvTree extends LitElement {
   /** Clicking the toggle of an item expands or collapses it; clicking elsewhere on it selects it. */
   private _onClick(event: MouseEvent): void {
     const node = this._eventNode(event);
-    if (!node || this.disabled) {
+    if (!node || this.disabled || this._isEditor(event)) {
       return;
     }
     if ((event.target as HTMLElement).closest('[part="toggle"]')) {
       this._toggle(node);
     } else {
       this._select(node);
+    }
+  }
+
+  /** Double-clicking an editable item, not its toggle, edits its label. */
+  private _onDoubleClick(event: MouseEvent): void {
+    const node = this._eventNode(event);
+    if (node && !(event.target as HTMLElement).closest('[part="toggle"]') && !this._isEditor(event)) {
+      this._startEditing(node);
+    }
+  }
+
+  /** Whether an event happened in the text field that edits a label. */
+  private _isEditor(event: Event): boolean {
+    return (event.composedPath()[0] as HTMLElement).getAttribute?.('part') === 'editor';
+  }
+
+  private _editor(): HTMLInputElement | null {
+    return this.renderRoot.querySelector<HTMLInputElement>('[part="editor"]');
+  }
+
+  /** Shows the text field for the label of an item, focused with the label selected, if the user can edit it. */
+  private async _startEditing(node: Node): Promise<void> {
+    if (!node.item.editable || this.disabled || this.readonly || node.item.disabled) {
+      return;
+    }
+    this._closeTooltip();
+    this._focusedKey = node.item.key;
+    this._editingKey = node.item.key;
+    await this.updateComplete;
+    const editor = this._editor();
+    editor?.focus();
+    editor?.select();
+  }
+
+  /**
+   * Stops editing: saves the label typed if it changed, showing it until the server
+   * sends the item back, and gives focus back to the item unless it went elsewhere.
+   */
+  private async _stopEditing(save: boolean, refocus: boolean): Promise<void> {
+    const key = this._editingKey;
+    const node = key === null ? undefined : this._nodes.get(key);
+    const label = this._editor()?.value;
+    this._editingKey = null;
+    if (save && node && label !== undefined && label !== node.item.label) {
+      node.item = { ...node.item, label };
+      this.$server?.edit(node.item.key, label);
+    }
+    if (refocus && key !== null) {
+      await this.updateComplete;
+      this._itemElement(key)?.focus();
+    }
+  }
+
+  /**
+   * Enter saves the label and Escape cancels, without closing a dialog; other keys are
+   * the text field's, and the tree leaves them alone.
+   */
+  private _onEditorKeyDown(event: KeyboardEvent): void {
+    if (event.key === 'Enter') {
+      event.preventDefault();
+      this._stopEditing(true, true);
+    } else if (event.key === 'Escape') {
+      event.preventDefault();
+      event.stopPropagation();
+      this._stopEditing(false, true);
+    }
+  }
+
+  /** Focus leaving the text field saves the label, unless editing already stopped. */
+  private _onEditorBlur(): void {
+    if (this._editingKey !== null) {
+      this._stopEditing(true, false);
     }
   }
 
@@ -1137,7 +1256,7 @@ export class TfvTree extends LitElement {
 
   private _onKeyDown(event: KeyboardEvent): void {
     const node = this._eventNode(event);
-    if (!node || this.disabled || event.altKey || event.ctrlKey || event.metaKey) {
+    if (!node || this.disabled || event.altKey || event.ctrlKey || event.metaKey || this._isEditor(event)) {
       return;
     }
     if (event.key === 'Escape') {
@@ -1177,6 +1296,8 @@ export class TfvTree extends LitElement {
       }
     } else if (event.key === 'Enter' || (event.key === ' ' && this._typed === '')) {
       this._select(node);
+    } else if (event.key === 'F2') {
+      this._startEditing(node);
     } else if (event.key === '*') {
       this._expandSiblings(node);
     } else if ([...event.key].length === 1) {

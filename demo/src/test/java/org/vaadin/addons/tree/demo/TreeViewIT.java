@@ -582,6 +582,58 @@ class TreeViewIT {
     }
 
     @Test
+    void f2RenamesTheFocusedItemInATextFieldAndEnterSavesIt() {
+        item(projects(), "Reports").click();
+        page.keyboard().press("F2");
+        Locator editor = projects().getByRole(AriaRole.TEXTBOX, new Locator.GetByRoleOptions().setName("Label"));
+        assertThat(editor).isFocused();
+        assertThat(editor).hasValue("Reports");
+        assertNoAccessibilityViolations(page);
+
+        page.keyboard().type("Results");
+        page.keyboard().press("Enter");
+
+        assertThat(projects().getByRole(AriaRole.TREEITEM)).hasText(new String[] { "Results", "Archive", "Drafts" });
+        assertThat(projectsStatus()).hasText("Renamed Reports to Results by the user");
+        assertThat(item(projects(), "Results")).isFocused();
+
+        // The app keeps the new name when it refreshes the project
+        page.getByRole(AriaRole.BUTTON, new Page.GetByRoleOptions().setName("Add a report")).click();
+        assertThat(item(projects(), "Results")).hasAttribute("aria-expanded", "false");
+        item(projects(), "Results").locator("[part=toggle]").click();
+        assertThat(projects().getByRole(AriaRole.TREEITEM))
+                .hasText(new String[] { "Results", "Report 1", "Report 2", "Archive", "Drafts" });
+    }
+
+    @Test
+    void aLabelTheAppRejectsGoesBackToTheOldOne() {
+        item(projects(), "Drafts").dblclick();
+        Locator editor = projects().getByRole(AriaRole.TEXTBOX, new Locator.GetByRoleOptions().setName("Label"));
+        assertThat(editor).isFocused();
+
+        editor.fill("  ");
+        page.keyboard().press("Enter");
+
+        assertThat(projects().getByRole(AriaRole.TREEITEM)).hasText(new String[] { "Reports", "Archive", "Drafts" });
+        assertThat(projectsStatus()).hasText("Kept Drafts: a name cannot be blank");
+    }
+
+    @Test
+    void escapeCancelsRenamingAndTheContextMenuStartsIt() {
+        item(projects(), "Archive").click(new Locator.ClickOptions().setButton(MouseButton.RIGHT));
+        page.getByRole(AriaRole.MENUITEM, new Page.GetByRoleOptions().setName("Rename")).click();
+        Locator editor = projects().getByRole(AriaRole.TEXTBOX, new Locator.GetByRoleOptions().setName("Label"));
+        assertThat(editor).isFocused();
+
+        page.keyboard().type("Old stuff");
+        page.keyboard().press("Escape");
+
+        assertThat(editor).hasCount(0);
+        assertThat(item(projects(), "Archive")).isFocused();
+        assertThat(projectsStatus()).hasText("");
+    }
+
+    @Test
     void theTextsTheTreeShowsByItselfCanBeTranslated() {
         page.getByRole(AriaRole.BUTTON, new Page.GetByRoleOptions().setName("Remove all projects")).click();
         assertThat(projects().getByText("No items")).isVisible();

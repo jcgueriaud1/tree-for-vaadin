@@ -29,6 +29,10 @@ type FakeServer = TreeServer & {
   tooltips: Record<string, string>;
   /** The labels of the disabled items. */
   disabled: string[];
+  /** The labels of the items the user can edit. */
+  editable: string[];
+  /** The edit calls made, as [key, label]. */
+  edits: string[][];
   /** The keys of the parents whose child items fail to load, null for the root items. */
   failing: (string | null)[];
   /** While true, fetches wait until release() is called. */
@@ -62,6 +66,8 @@ function serverWith(roots: FakeItem[]): FakeServer {
     icons: {},
     tooltips: {},
     disabled: [],
+    editable: [],
+    edits: [],
     failing: [],
     hold: false,
     release() {
@@ -85,6 +91,7 @@ function serverWith(roots: FakeItem[]): FakeServer {
           icon: server.icons[label] ?? null,
           tooltip: server.tooltips[label] ?? null,
           disabled: server.disabled.includes(label),
+          editable: server.editable.includes(label),
           selected: key === server.selectedKey,
           onSelectionPath: server.selectionPath.includes(key),
         };
@@ -99,6 +106,9 @@ function serverWith(roots: FakeItem[]): FakeServer {
     },
     select(key) {
       server.selections.push(key);
+    },
+    edit(key, label) {
+      server.edits.push([key, label]);
     },
   };
   return server;
@@ -969,6 +979,151 @@ describe('tfv-tree', () => {
     });
   });
 
+  describe('editing labels', () => {
+    function editor(tree: TfvTree): HTMLInputElement | null {
+      return tree.shadowRoot!.querySelector<HTMLInputElement>('[part="editor"]');
+    }
+
+    /** Presses a key in the editor, as the browser would dispatch it there. */
+    async function pressInEditor(tree: TfvTree, key: string): Promise<KeyboardEvent> {
+      const event = new KeyboardEvent('keydown', { key, bubbles: true, composed: true, cancelable: true });
+      editor(tree)!.dispatchEvent(event);
+      await settle(tree);
+      return event;
+    }
+
+    async function editableTree(): Promise<{ tree: TfvTree; server: FakeServer }> {
+      const server = serverWith(FOLDERS);
+      server.editable = ['Documents', 'Music'];
+      const tree = await treeWith(server);
+      return { tree, server };
+    }
+
+    it('edits the label of the focused item on F2, in a labelled text field with the label selected', async () => {
+      const { tree } = await editableTree();
+      const music = item(tree, 'Music');
+      music.focus();
+
+      await press(tree, 'F2');
+
+      const input = editor(tree)!;
+      expect(input.closest('[role="treeitem"]')).to.equal(music);
+      expect(input.value).to.equal('Music');
+      expect(input.getAttribute('aria-label')).to.equal(DEFAULT_I18N.editor);
+      expect(tree.shadowRoot!.activeElement).to.equal(input);
+      expect([input.selectionStart, input.selectionEnd]).to.deep.equal([0, 5]);
+      await expect(tree).to.be.accessible();
+    });
+
+    it('saves the new label on Enter, shows it, and gives focus back to the item', async () => {
+      const { tree, server } = await editableTree();
+      item(tree, 'Music').focus();
+      await press(tree, 'F2');
+
+      editor(tree)!.value = 'Songs';
+      const enter = await pressInEditor(tree, 'Enter');
+
+      expect(enter.defaultPrevented).to.be.true;
+      expect(server.edits).to.deep.equal([['1', 'Songs']]);
+      expect(editor(tree)).to.equal(null);
+      expect(labels(tree)).to.deep.equal(['Documents', 'Songs', 'Pictures']);
+      expect(focusedLabel(tree)).to.equal('Songs');
+    });
+
+    it('cancels on Escape, without letting it close a dialog, and sends nothing for a label left as it is', async () => {
+      const { tree, server } = await editableTree();
+      item(tree, 'Music').focus();
+      await press(tree, 'F2');
+      let escapeReachedOutside = false;
+      tree.parentElement!.addEventListener('keydown', () => (escapeReachedOutside = true));
+
+      editor(tree)!.value = 'Songs';
+      await pressInEditor(tree, 'Escape');
+      expect(escapeReachedOutside).to.be.false;
+      expect(labels(tree)).to.deep.equal(['Documents', 'Music', 'Pictures']);
+      expect(focusedLabel(tree)).to.equal('Music');
+
+      await press(tree, 'F2');
+      await pressInEditor(tree, 'Enter');
+      expect(server.edits).to.be.empty;
+    });
+
+    it('saves when focus leaves the editor', async () => {
+      const { tree, server } = await editableTree();
+      const outside = document.createElement('button');
+      tree.after(outside);
+      item(tree, 'Music').focus();
+      await press(tree, 'F2');
+
+      editor(tree)!.value = 'Songs';
+      outside.focus();
+      await settle(tree);
+
+      expect(server.edits).to.deep.equal([['1', 'Songs']]);
+      expect(editor(tree)).to.equal(null);
+    });
+
+    it('keeps the keys typed in the editor from moving focus, expanding or selecting', async () => {
+      const { tree, server } = await editableTree();
+      const documents = item(tree, 'Documents');
+      documents.focus();
+      await press(tree, 'F2');
+
+      for (const key of ['ArrowDown', 'ArrowRight', ' ', 'Home', 'm', '*']) {
+        expect((await pressInEditor(tree, key)).defaultPrevented, key).to.be.false;
+      }
+
+      expect(tree.shadowRoot!.activeElement).to.equal(editor(tree));
+      expect(treeItems(tree)).to.have.length(3, 'nothing expanded');
+      expect(documents.getAttribute('aria-expanded')).to.equal('false');
+      expect(server.selections).to.be.empty;
+    });
+
+    it('edits an editable item on double-click, without clicks in the editor selecting it', async () => {
+      const { tree, server } = await editableTree();
+      const label = item(tree, 'Documents').querySelector('[part="label"]')!;
+
+      label.dispatchEvent(new MouseEvent('dblclick', { bubbles: true, composed: true }));
+      await settle(tree);
+      editor(tree)!.click();
+      await settle(tree);
+
+      expect(editor(tree)!.value).to.equal('Documents');
+      expect(server.selections).to.be.empty;
+      expect(server.expansions).to.be.empty;
+    });
+
+    it('edits an item when the server asks, if it is shown', async () => {
+      const { tree } = await editableTree();
+
+      tree.editItem('1');
+      await settle(tree);
+
+      expect(editor(tree)!.value).to.equal('Music');
+      expect(tree.shadowRoot!.activeElement).to.equal(editor(tree));
+    });
+
+    it('does not edit an item that is not editable, nor while the tree is disabled or read-only', async () => {
+      const { tree } = await editableTree();
+      item(tree, 'Pictures').focus();
+      await press(tree, 'F2');
+      item(tree, 'Pictures').dispatchEvent(new MouseEvent('dblclick', { bubbles: true, composed: true }));
+      await settle(tree);
+      expect(editor(tree)).to.equal(null);
+
+      tree.readonly = true;
+      item(tree, 'Music').focus();
+      await press(tree, 'F2');
+      expect(editor(tree)).to.equal(null);
+
+      tree.readonly = false;
+      tree.disabled = true;
+      tree.editItem('1');
+      await settle(tree);
+      expect(editor(tree)).to.equal(null);
+    });
+  });
+
   describe('context menu', () => {
     /** Right-clicks an element, and gives the detail the tree hands Vaadin's context menu while it is dispatched. */
     function contextMenuDetail(tree: TfvTree, target: Element, wrap: boolean): unknown {
@@ -1285,7 +1440,7 @@ describe('tfv-tree', () => {
       const tree = await treeWith(serverWith(FOLDERS));
 
       const letters = { key: '0/1', label: 'Mail', icon: null, tooltip: null, expandable: true, expanded: true };
-      tree.refreshItem({ ...letters, selected: false, onSelectionPath: false, disabled: false }, true);
+      tree.refreshItem({ ...letters, selected: false, onSelectionPath: false, disabled: false, editable: false }, true);
       await settle(tree);
 
       expect(labels(tree)).to.deep.equal(['Documents', 'Music', 'Pictures']);
@@ -1293,6 +1448,7 @@ describe('tfv-tree', () => {
 
     it('shows the texts the server sets', async () => {
       const server = serverWith([['Documents', ['Invoices']]]);
+      server.editable = ['Documents'];
       server.failing = ['0'];
       const tree = await treeWith(server, (element) => {
         element.i18n = {
@@ -1300,11 +1456,17 @@ describe('tfv-tree', () => {
           empty: 'Ei kohteita',
           loadError: 'Lataus epäonnistui',
           selectionPath: 'Sisältää valitun kohteen',
+          editor: 'Nimi',
         };
       });
       tree.setSelection(null, '0');
       await tree.updateComplete;
       expect(description(tree, 'Documents')).to.equal('Sisältää valitun kohteen');
+      tree.editItem('0');
+      await settle(tree);
+      expect(tree.shadowRoot!.querySelector('[part="editor"]')!.getAttribute('aria-label')).to.equal('Nimi');
+      await sendKeys({ press: 'Escape' });
+      await settle(tree);
 
       server.hold = true;
       const refreshed = tree.refresh();

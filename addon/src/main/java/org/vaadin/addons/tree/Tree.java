@@ -61,7 +61,8 @@ import com.vaadin.flow.shared.Registration;
  * {@link #setItemIconGenerator} and {@link #setItemTooltipGenerator}. Items
  * can be disabled with {@link #setItemEnabledProvider}: the user can focus and
  * expand them, but not select them. {@link #addContextMenu()} adds a context
- * menu for the items.
+ * menu for the items. The user can edit the labels of the items
+ * {@link #setItemEditableProvider} allows, firing an {@link EditEvent}.
  * <p>
  * When the data changes, {@link HierarchicalDataProvider#refreshAll()} has the
  * browser fetch the items again: items that still exist, by their id, stay
@@ -107,10 +108,11 @@ public class Tree<T> extends Component
      * An item as the browser sees it: the key it refers to it by, its label,
      * its icon and tooltip if any, whether it has child items, whether it is
      * expanded, whether it is the selected item, whether it is on the
-     * selection path and whether it is disabled.
+     * selection path, whether it is disabled and whether the user can edit its
+     * label.
      */
     record TreeItem(String key, String label, String icon, String tooltip, boolean expandable, boolean expanded,
-            boolean selected, boolean onSelectionPath, boolean disabled) implements Serializable {
+            boolean selected, boolean onSelectionPath, boolean disabled, boolean editable) implements Serializable {
     }
 
     /** A page of child items, with the number of children the parent has in all. */
@@ -123,6 +125,7 @@ public class Tree<T> extends Component
     private SerializableFunction<T, String> itemIconGenerator = item -> null;
     private SerializableFunction<T, String> itemTooltipGenerator = item -> null;
     private SerializablePredicate<T> itemEnabledProvider = item -> true;
+    private SerializablePredicate<T> itemEditableProvider = item -> false;
     private Registration dataProviderListener;
     /** The ids of the expanded items, kept across refreshes. */
     private final Set<Object> expandedIds = new HashSet<>();
@@ -269,6 +272,64 @@ public class Tree<T> extends Component
      */
     public SerializablePredicate<T> getItemEnabledProvider() {
         return itemEnabledProvider;
+    }
+
+    /**
+     * Sets which items the user can rename: edit the label of in place, in a
+     * text field, on F2 or double-click, or when {@link #editItem} is called.
+     * Enter, or focus leaving the field, fires an {@link EditEvent}; Escape
+     * cancels. The tree then shows the label the item label generator gives
+     * the item, so the app renames the item by changing it in the listener, or
+     * rejects the label by leaving it as it is. Disabled items, and any item
+     * while the selection is read-only, cannot be edited. By default no item
+     * can be edited.
+     *
+     * @param itemEditableProvider
+     *            tells whether the user can edit the label of an item; not
+     *            {@code null}
+     * @see #addEditListener
+     */
+    public void setItemEditableProvider(SerializablePredicate<T> itemEditableProvider) {
+        this.itemEditableProvider = Objects.requireNonNull(itemEditableProvider, "itemEditableProvider");
+        refresh();
+    }
+
+    /**
+     * Gets which items the user can rename.
+     *
+     * @return the item editable provider, never {@code null}
+     */
+    public SerializablePredicate<T> getItemEditableProvider() {
+        return itemEditableProvider;
+    }
+
+    /**
+     * Listens to labels being edited by the user.
+     *
+     * @param listener
+     *            the listener, not {@code null}
+     * @return a handle to stop listening
+     * @see #setItemEditableProvider
+     */
+    @SuppressWarnings({ "unchecked", "rawtypes" })
+    public Registration addEditListener(ComponentEventListener<EditEvent<T>> listener) {
+        return addListener(EditEvent.class, (ComponentEventListener) listener);
+    }
+
+    /**
+     * Has the user edit the label of an item, as on F2: from a context menu
+     * item, for instance. The browser must show the item: call
+     * {@link #scrollToItem} first if it may not. Nothing happens if the user
+     * cannot edit it.
+     *
+     * @param item
+     *            the item, not {@code null}
+     */
+    public void editItem(T item) {
+        Objects.requireNonNull(item, "item");
+        if (keyMapper.has(item)) {
+            getElement().callJsFunction("editItem", keyMapper.key(item));
+        }
     }
 
     /**
@@ -570,6 +631,32 @@ public class Tree<T> extends Component
         }
     }
 
+    /**
+     * Renames an item, as the user did in the browser: fires an
+     * {@link EditEvent} if the user can edit the item, then sends the item
+     * back, with the label the app gives it, in place of the one the browser
+     * shows meanwhile.
+     *
+     * @param key
+     *            the key of the item; an item no longer known is ignored
+     * @param label
+     *            the label the user typed
+     */
+    @ClientCallable
+    void edit(String key, String label) {
+        T item = keyMapper.get(key);
+        if (item == null) {
+            return;
+        }
+        if (itemEditableProvider.test(item) && itemEnabledProvider.test(item) && !singleSelect.isReadOnly()) {
+            fireEvent(new EditEvent<>(this, true, item, Objects.requireNonNullElse(label, "")));
+        }
+        // The listener may have refreshed the data, and the item with it
+        if (keyMapper.has(item)) {
+            getElement().callJsFunction("refreshItem", treeItem(item), false);
+        }
+    }
+
     private void setExpanded(Collection<T> items, boolean expanded, boolean fromClient) {
         List<T> changed = new ArrayList<>();
         for (T item : items) {
@@ -653,7 +740,8 @@ public class Tree<T> extends Component
         Object id = dataProvider.getId(item);
         return new TreeItem(keyMapper.key(item), itemLabelGenerator.apply(item), itemIconGenerator.apply(item),
                 itemTooltipGenerator.apply(item), dataProvider.hasChildren(item), isExpanded(item),
-                Objects.equals(id, idOf(selectedItem)), selectionPathIds.contains(id), !itemEnabledProvider.test(item));
+                Objects.equals(id, idOf(selectedItem)), selectionPathIds.contains(id), !itemEnabledProvider.test(item),
+                itemEditableProvider.test(item));
     }
 
     /**

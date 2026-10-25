@@ -1,6 +1,7 @@
 package org.vaadin.addons.tree.demo;
 
 import java.util.List;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.function.Function;
 import java.util.stream.Collectors;
 import java.util.stream.Stream;
@@ -35,6 +36,45 @@ public class TreeView extends Main {
 
     /** A folder of the demo's file system. */
     public record Folder(String name) {
+    }
+
+    private static final int REPORTS = 1;
+    private static final int ARCHIVE = 2;
+    /** The ids of the reports added, after the ones {@link #fillProjects} gives. */
+    private static final AtomicInteger NEXT_ID = new AtomicInteger(100);
+
+    /** A project, which the user can rename: the same project, by its id, whatever its name. */
+    public static class Project {
+
+        private final int id;
+        private String name;
+
+        public Project(int id, String name) {
+            this.id = id;
+            this.name = name;
+        }
+
+        public int getId() {
+            return id;
+        }
+
+        public String getName() {
+            return name;
+        }
+
+        public void setName(String name) {
+            this.name = name;
+        }
+
+        @Override
+        public boolean equals(Object other) {
+            return other instanceof Project project && project.id == id;
+        }
+
+        @Override
+        public int hashCode() {
+            return Integer.hashCode(id);
+        }
     }
 
     /** A shortcut to a folder, which a tree bound with a {@link Binder} edits. */
@@ -140,28 +180,49 @@ public class TreeView extends Main {
      * them. The child items of the archive fail to load.
      */
     private static Section projects() {
-        TreeData<Folder> data = new TreeData<>();
+        TreeData<Project> data = new TreeData<>();
         fillProjects(data);
-        Folder reports = new Folder("Reports");
-        Folder archive = new Folder("Archive");
-        TreeDataProvider<Folder> provider = new TreeDataProvider<>(data) {
+        Project archive = new Project(ARCHIVE, "Archive");
+        TreeDataProvider<Project> provider = new TreeDataProvider<>(data) {
             @Override
-            public Stream<Folder> fetchChildren(HierarchicalQuery<Folder, SerializablePredicate<Folder>> query) {
+            public Stream<Project> fetchChildren(HierarchicalQuery<Project, SerializablePredicate<Project>> query) {
                 if (archive.equals(query.getParent())) {
                     throw new IllegalStateException("The archive is offline");
                 }
                 return super.fetchChildren(query);
             }
         };
-        Tree<Folder> tree = newTree();
+        Tree<Project> tree = newTree();
         tree.setAriaLabel("Projects");
         tree.setDataProvider(provider);
-        tree.setItemLabelGenerator(Folder::name);
-        tree.setItemIconGenerator(folder -> "vaadin:folder");
+        tree.setItemLabelGenerator(Project::getName);
+        tree.setItemIconGenerator(project -> "vaadin:folder");
+        Paragraph log = eventLog(tree, Project::getName);
+
+        // F2, double-click or the context menu renames a project; a blank name is rejected by leaving it as it is
+        tree.setItemEditableProvider(project -> true);
+        tree.addEditListener(event -> {
+            Project project = event.getItem();
+            String name = event.getLabel().strip();
+            if (name.isEmpty()) {
+                log.setText("Kept " + project.getName() + ": a name cannot be blank");
+                return;
+            }
+            log.setText("Renamed " + project.getName() + " to " + name + " by the user");
+            project.setName(name);
+            provider.refreshItem(project);
+        });
+        TreeContextMenu<Project> menu = tree.addContextMenu();
+        menu.addItem("Rename", event -> menu.getTargetItem().ifPresent(tree::editItem));
+        menu.setDynamicContentHandler(project -> project != null);
 
         Button add = new Button("Add a report", event -> {
-            data.addItem(reports, new Folder("Report " + (data.getChildren(reports).size() + 1)));
-            provider.refreshItem(reports, true);
+            // The reports in the data, with the name the user may have given them
+            data.getRootItems().stream().filter(project -> project.getId() == REPORTS).findFirst().ifPresent(reports -> {
+                int number = data.getChildren(reports).size() + 1;
+                data.addItem(reports, new Project(NEXT_ID.getAndIncrement(), "Report " + number));
+                provider.refreshItem(reports, true);
+            });
         });
         Button removeAll = new Button("Remove all projects", event -> {
             data.clear();
@@ -173,15 +234,15 @@ public class TreeView extends Main {
             provider.refreshAll();
         });
 
-        // The texts the tree shows by itself, and the description of the selection path
+        // The texts the tree shows by itself, and the ones for assistive technology
         Checkbox french = new Checkbox("French texts", event -> tree.setI18n(event.getValue()
                 ? new TreeI18n().setLoading("Chargement…").setEmpty("Aucun élément")
                         .setLoadError("Impossible de charger les éléments")
                         .setSelectionPath("Contient l’élément sélectionné")
+                        .setEditor("Nom")
                 : new TreeI18n()));
 
-        return new Section(new H2("Projects, changing and failing"), add, removeAll, restore, french, tree,
-                eventLog(tree, Folder::name));
+        return new Section(new H2("Projects, changing and failing"), add, removeAll, restore, french, tree, log);
     }
 
     /**
@@ -216,12 +277,12 @@ public class TreeView extends Main {
         return new Section(new H2("A form field, read-only or disabled"), options, label, tree, status);
     }
 
-    private static void fillProjects(TreeData<Folder> data) {
-        Folder reports = new Folder("Reports");
-        Folder archive = new Folder("Archive");
-        data.addRootItems(reports, archive, new Folder("Drafts"));
-        data.addItems(reports, new Folder("Report 1"));
-        data.addItems(archive, new Folder("2019"));
+    private static void fillProjects(TreeData<Project> data) {
+        Project reports = new Project(REPORTS, "Reports");
+        Project archive = new Project(ARCHIVE, "Archive");
+        data.addRootItems(reports, archive, new Project(3, "Drafts"));
+        data.addItems(reports, new Project(4, "Report 1"));
+        data.addItems(archive, new Project(5, "2019"));
     }
 
     /** A status line telling the latest items expanded, collapsed or selected, and by whom. */

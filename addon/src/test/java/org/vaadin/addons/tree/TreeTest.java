@@ -148,12 +148,13 @@ class TreeTest extends BrowserlessTest {
         assertEquals("No items", i18n.getEmpty());
         assertEquals("Could not load the items", i18n.getLoadError());
         assertEquals("Contains the selected item", i18n.getSelectionPath());
+        assertEquals("Label", i18n.getEditor());
     }
 
     @Test
     void theTextsSetAreSentToTheBrowser() {
         TreeI18n i18n = new TreeI18n().setLoading("Ladataan…").setEmpty("Ei kohteita")
-                .setLoadError("Lataus epäonnistui").setSelectionPath("Sisältää valitun kohteen");
+                .setLoadError("Lataus epäonnistui").setSelectionPath("Sisältää valitun kohteen").setEditor("Nimi");
 
         tree.setI18n(i18n);
 
@@ -163,6 +164,7 @@ class TreeTest extends BrowserlessTest {
         assertEquals("Ei kohteita", sent.get("empty").asString());
         assertEquals("Lataus epäonnistui", sent.get("loadError").asString());
         assertEquals("Sisältää valitun kohteen", sent.get("selectionPath").asString());
+        assertEquals("Nimi", sent.get("editor").asString());
     }
 
     @Test
@@ -172,6 +174,7 @@ class TreeTest extends BrowserlessTest {
         assertThrows(NullPointerException.class, () -> new TreeI18n().setEmpty(null));
         assertThrows(NullPointerException.class, () -> new TreeI18n().setLoadError(null));
         assertThrows(NullPointerException.class, () -> new TreeI18n().setSelectionPath(null));
+        assertThrows(NullPointerException.class, () -> new TreeI18n().setEditor(null));
     }
 
     @Test
@@ -179,6 +182,72 @@ class TreeTest extends BrowserlessTest {
         assertThrows(NullPointerException.class, () -> tree.setItemIconGenerator(null));
         assertThrows(NullPointerException.class, () -> tree.setItemTooltipGenerator(null));
         assertThrows(NullPointerException.class, () -> tree.setItemEnabledProvider(null));
+        assertThrows(NullPointerException.class, () -> tree.setItemEditableProvider(null));
+    }
+
+    @Test
+    void itemsAreNotEditableUnlessTheProviderSaysSo() {
+        assertEquals(List.of(false, false), editable(tree.fetchChildren(null, 0, 50)));
+
+        tree.setItemEditableProvider(folder -> folder.equals(music));
+
+        assertEquals(List.of(false, true), editable(tree.fetchChildren(null, 0, 50)));
+        assertEquals(1, calls("refresh").size(), "the browser fetches the items again");
+    }
+
+    @Test
+    void theUserEditingALabelFiresAnEditEventAndGetsTheItemBackAsTheAppLabelsIt() {
+        tree.setItemEditableProvider(folder -> true);
+        String musicKey = key(music);
+        List<EditEvent<Folder>> events = new ArrayList<>();
+        tree.addEditListener(events::add);
+        calls("refreshItem");
+
+        tree.edit(musicKey, "Songs");
+
+        assertEquals(1, events.size());
+        assertEquals(music, events.get(0).getItem());
+        assertEquals("Songs", events.get(0).getLabel());
+        assertTrue(events.get(0).isFromClient());
+        List<List<Object>> sentBack = calls("refreshItem");
+        assertEquals(1, sentBack.size());
+        TreeItem item = (TreeItem) sentBack.get(0).get(0);
+        assertEquals(musicKey, item.key());
+        assertEquals("Music", item.label(), "the label the app gives the item, which it has not renamed");
+        assertEquals(false, sentBack.get(0).get(1), "its child items are left as they are");
+    }
+
+    @Test
+    void anEditTheUserCannotMakeIsIgnoredAndTheItemSentBack() {
+        tree.setItemEditableProvider(folder -> folder.equals(docs));
+        tree.setItemEnabledProvider(folder -> !folder.equals(docs));
+        String docsKey = key(docs);
+        String musicKey = key(music);
+        List<EditEvent<Folder>> events = new ArrayList<>();
+        tree.addEditListener(events::add);
+        calls("refreshItem");
+
+        tree.edit(musicKey, "Songs");
+        tree.edit(docsKey, "Papers");
+        tree.setItemEnabledProvider(folder -> true);
+        docsKey = key(docs);
+        tree.asSingleSelect().setReadOnly(true);
+        tree.edit(docsKey, "Papers");
+        tree.edit("unknown", "Nothing");
+
+        assertTrue(events.isEmpty());
+        assertEquals(3, calls("refreshItem").size(), "not editable, disabled, read-only; the unknown one is gone");
+    }
+
+    @Test
+    void theServerEditsAnItemTheBrowserShows() {
+        tree.editItem(music);
+        assertTrue(calls("editItem").isEmpty(), "not fetched yet");
+
+        String musicKey = key(music);
+        tree.editItem(music);
+
+        assertEquals(List.of(List.of(musicKey)), calls("editItem"));
     }
 
     @Test
@@ -729,6 +798,10 @@ class TreeTest extends BrowserlessTest {
     private String key(Folder rootItem) {
         return tree.fetchChildren(null, 0, 50).items().stream()
                 .filter(item -> item.label().equals(rootItem.name())).findFirst().orElseThrow().key();
+    }
+
+    private static List<Boolean> editable(ItemPage page) {
+        return page.items().stream().map(TreeItem::editable).toList();
     }
 
     private static List<Boolean> disabled(ItemPage page) {

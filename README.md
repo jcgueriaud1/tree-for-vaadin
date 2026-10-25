@@ -17,7 +17,7 @@ The words in bold below are defined in [GLOSSARY.md](GLOSSARY.md); the design de
 - **Items** fetched lazily from any `HierarchicalDataProvider`, a page at a time, as the user expands items and scrolls.
 - **Expanding** and **collapsing** by the user or by the server, with events telling which.
 - One **selected item**, bound like any field with `asSingleSelect()`, with its ancestors marked.
-- Icons and tooltips on items, and a context menu.
+- Icons and tooltips on items, a context menu, and renaming items in place.
 - Data refreshes that keep the state of the tree, and messages for an empty tree and for items that fail to load,
   in your language.
 - Read-only and disabled states, for the whole tree or for single items.
@@ -179,6 +179,31 @@ menu.setDynamicContentHandler(folder -> {
 app may offer something there, but not on a disabled tree. Opening it changes neither the selection nor the focused
 item; it takes focus, and gives it back to the item when it closes.
 
+### Renaming items
+
+`setItemEditableProvider` lets the user rename items in place: F2 or a double-click puts a text field (part
+`editor`) in place of the label of the focused item, Enter or leaving the field saves, and Escape cancels; either
+gives focus back to the item. Saving fires an `EditEvent`, then the tree shows the label your label generator
+gives the item: rename the item in the listener to keep the new label, or leave it as it is to reject it.
+
+```java
+tree.setItemEditableProvider(project -> true);
+tree.addEditListener(event -> {
+    String name = event.getLabel().strip();
+    if (!name.isEmpty()) {
+        event.getItem().setName(name);
+        tree.getDataProvider().refreshItem(event.getItem());
+    }
+});
+
+// On a touch screen there is no F2: start renaming from a context menu
+TreeContextMenu<Project> menu = tree.addContextMenu();
+menu.addItem("Rename", event -> menu.getTargetItem().ifPresent(tree::editItem));
+```
+
+`editItem(item)` starts renaming an item the browser shows. Disabled items, and any item while the selection is
+read-only, cannot be renamed. The text field is named "Label" for assistive technology (`TreeI18n.setEditor`).
+
 ### Data changes, errors and texts (i18n)
 
 `refreshAll()` on the data provider has the browser fetch the items again. Items that still exist, by their id
@@ -196,15 +221,16 @@ A tree without items shows "No items" (part `empty`), which is also its accessib
 (`aria-description`), unless the app gives the tree a description of its own.
 
 The texts the tree shows by itself, "Loading…", "No items" and the load error, and the description of the
-selection path, "Contains the selected item", are English by default and set with `setI18n`. Set the object
-again after changing it:
+selection path, "Contains the selected item", and the name of the text field that renames an item, "Label", are
+English by default and set with `setI18n`. Set the object again after changing it:
 
 ```java
 tree.setI18n(new TreeI18n()
         .setLoading("Chargement…")
         .setEmpty("Aucun élément")
         .setLoadError("Impossible de charger les éléments")
-        .setSelectionPath("Contient l’élément sélectionné"));
+        .setSelectionPath("Contient l’élément sélectionné")
+        .setEditor("Nom"));
 ```
 
 Item labels and tooltips come from your generators, so translate them there.
@@ -238,6 +264,7 @@ does not follow focus: moving the **focused item** never changes the selected it
 | Enter, Space | Selects the focused item, unless it is disabled |
 | `*` | Expands the focused item and its siblings, in one `ExpandEvent` |
 | Shift+F10, Menu key | Opens the context menu of the focused item, if the tree has one |
+| F2 | Renames the focused item, if it can be renamed; then Enter saves and Escape cancels |
 | Any character | Moves focus to the next visible item whose label starts with it; characters typed within half a second, spaces included, are searched together |
 
 Left and Right are swapped when the tree is right to left (`dir="rtl"`). Type-ahead only searches the items
@@ -281,6 +308,7 @@ indicator.
 | `toggle-spacer` | Where the chevron would be, on an item without child items |
 | `icon` | The `<vaadin-icon>` of an item |
 | `label` | The label of an item |
+| `editor` | The text field in place of the label of an item being renamed |
 | `selection-path-marker` | The dot after an ancestor of the selected item |
 | `loading` | The row shown while the items of a level are fetched |
 | `empty` | The row shown when the tree has no items |
