@@ -29,12 +29,16 @@ public class CatalogDataProvider extends AbstractBackEndHierarchicalDataProvider
     public record Category(String name, int productCount) implements Entry {
     }
 
-    /** The product at the given index of its category. */
+    /** The product at the given index of its category. Every seventh product is out of stock. */
     public record Product(Category category, int index) implements Entry {
 
         @Override
         public String name() {
             return category.name() + " item " + (index + 1);
+        }
+
+        public boolean inStock() {
+            return (index + 1) % 7 != 0;
         }
     }
 

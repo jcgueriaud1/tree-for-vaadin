@@ -20,7 +20,7 @@ The words in bold below are defined in [GLOSSARY.md](GLOSSARY.md); the design de
 - Icons and tooltips on items.
 - Data refreshes that keep the state of the tree, and messages for an empty tree and for items that fail to load,
   in your language.
-- Read-only and disabled states.
+- Read-only and disabled states, for the whole tree or for single items.
 - Touch screens: items and their toggle are fingertip-sized there.
 - The Aura and Lumo themes, light or dark, and styling through parts and CSS custom properties.
 
@@ -101,6 +101,7 @@ complete one.
 ```java
 tree.setItemIconGenerator(folder -> "vaadin:folder");  // an icon name, or null for none
 tree.setItemTooltipGenerator(Folder::description);     // the tooltip text, or null for none
+tree.setItemEnabledProvider(folder -> !folder.archived()); // a disabled item cannot be selected
 
 tree.expand(documents);                 // or collapse(...), isExpanded(...)
 tree.addExpandListener(event -> log("Expanded " + event.getItems() + (event.isFromClient() ? " by the user" : "")));
@@ -147,6 +148,11 @@ down, then scrolls the item into view.
 `asSingleSelect().setReadOnly(true)` (or `binder.setReadOnly(true)`) keeps the user from changing the selection;
 they can still expand, collapse and move through the items. `setEnabled(false)` disables the whole tree: it
 still shows its items, dimmed, but takes no input and is out of the tab order (`aria-disabled`).
+
+`setItemEnabledProvider` disables single items instead. A disabled item looks muted and is `aria-disabled`; the
+user can still focus it, read its tooltip, and expand and collapse it, so its child items stay reachable, but
+cannot select it, by clicking or with Enter or Space. The server can still select it with `setValue`. Give a
+disabled item a tooltip that says why it is disabled: it is also its accessible description.
 
 ### Data changes, errors and texts (i18n)
 
@@ -204,7 +210,7 @@ does not follow focus: moving the **focused item** never changes the selected it
 | Home / End | Moves focus to the first / last visible item |
 | Right | Expands a collapsed item; on an expanded item, moves focus to its first child item |
 | Left | Collapses an expanded item; otherwise moves focus to its parent |
-| Enter, Space | Selects the focused item |
+| Enter, Space | Selects the focused item, unless it is disabled |
 | `*` | Expands the focused item and its siblings, in one `ExpandEvent` |
 | Any character | Moves focus to the next visible item whose label starts with it; characters typed within half a second, spaces included, are searched together |
 
@@ -268,12 +274,14 @@ the shadow DOM, the same states are attributes of the item.
 | `selection-path` | the item is an ancestor of the selected item |
 | `focused` | the item has focus |
 | `focus-ring` | the item has focus from the keyboard, and shows a focus ring |
+| `disabled` | the item is disabled by `setItemEnabledProvider` |
 
 | Custom property | Default: Aura, else Lumo, else the Vaadin base styles |
 | --- | --- |
 | `--tfv-tree-font-size`, `--tfv-tree-line-height` | `--aura-font-size-m` / `--lumo-font-size-m`, and the matching line heights |
 | `--tfv-tree-text-color` | `--lumo-body-text-color` / `--vaadin-text-color` |
 | `--tfv-tree-secondary-text-color` | `--lumo-secondary-text-color` / `--vaadin-text-color-secondary`: loading and empty rows, and the defaults of the two below |
+| `--tfv-tree-disabled-text-color` | a disabled item: `--lumo-disabled-text-color` / `--vaadin-text-color-disabled` |
 | `--tfv-tree-error-text-color` | the error row: `--aura-red-text` / `--lumo-error-text-color`, else `--tfv-tree-text-color` |
 | `--tfv-tree-icon-color`, `--tfv-tree-toggle-color` | `--tfv-tree-secondary-text-color` |
 | `--tfv-tree-icon-size` | `--lumo-icon-size-s` / `--vaadin-icon-size` |

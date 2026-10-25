@@ -39,6 +39,7 @@ import com.vaadin.flow.data.selection.SingleSelect;
 import com.vaadin.flow.dom.DisabledUpdateMode;
 import com.vaadin.flow.dom.Element;
 import com.vaadin.flow.function.SerializableFunction;
+import com.vaadin.flow.function.SerializablePredicate;
 import com.vaadin.flow.shared.Registration;
 
 /**
@@ -57,7 +58,9 @@ import com.vaadin.flow.shared.Registration;
  * {@link HierarchicalDataProvider#getParent(Object) getParent}.
  * <p>
  * Each item can show an icon in front of its label, and a tooltip, from
- * {@link #setItemIconGenerator} and {@link #setItemTooltipGenerator}.
+ * {@link #setItemIconGenerator} and {@link #setItemTooltipGenerator}. Items
+ * can be disabled with {@link #setItemEnabledProvider}: the user can focus and
+ * expand them, but not select them.
  * <p>
  * When the data changes, {@link HierarchicalDataProvider#refreshAll()} has the
  * browser fetch the items again: items that still exist, by their id, stay
@@ -102,11 +105,11 @@ public class Tree<T> extends Component
     /**
      * An item as the browser sees it: the key it refers to it by, its label,
      * its icon and tooltip if any, whether it has child items, whether it is
-     * expanded, whether it is the selected item and whether it is on the
-     * selection path.
+     * expanded, whether it is the selected item, whether it is on the
+     * selection path and whether it is disabled.
      */
     record TreeItem(String key, String label, String icon, String tooltip, boolean expandable, boolean expanded,
-            boolean selected, boolean onSelectionPath) implements Serializable {
+            boolean selected, boolean onSelectionPath, boolean disabled) implements Serializable {
     }
 
     /** A page of child items, with the number of children the parent has in all. */
@@ -118,6 +121,7 @@ public class Tree<T> extends Component
     private ItemLabelGenerator<T> itemLabelGenerator = String::valueOf;
     private SerializableFunction<T, String> itemIconGenerator = item -> null;
     private SerializableFunction<T, String> itemTooltipGenerator = item -> null;
+    private SerializablePredicate<T> itemEnabledProvider = item -> true;
     private Registration dataProviderListener;
     /** The ids of the expanded items, kept across refreshes. */
     private final Set<Object> expandedIds = new HashSet<>();
@@ -240,6 +244,30 @@ public class Tree<T> extends Component
      */
     public SerializableFunction<T, String> getItemTooltipGenerator() {
         return itemTooltipGenerator;
+    }
+
+    /**
+     * Sets which items are enabled. A disabled item looks muted and is
+     * {@code aria-disabled}: the user can still focus it, see its tooltip, and
+     * expand and collapse it, but cannot select it. The server can still
+     * select it with {@link #asSingleSelect()}. By default every item is
+     * enabled.
+     *
+     * @param itemEnabledProvider
+     *            tells whether an item is enabled; not {@code null}
+     */
+    public void setItemEnabledProvider(SerializablePredicate<T> itemEnabledProvider) {
+        this.itemEnabledProvider = Objects.requireNonNull(itemEnabledProvider, "itemEnabledProvider");
+        refresh();
+    }
+
+    /**
+     * Gets which items are enabled.
+     *
+     * @return the item enabled provider, never {@code null}
+     */
+    public SerializablePredicate<T> getItemEnabledProvider() {
+        return itemEnabledProvider;
     }
 
     /**
@@ -503,7 +531,8 @@ public class Tree<T> extends Component
      * Selects an item, as the user did in the browser.
      *
      * @param key
-     *            the key of the item; an item no longer known is ignored
+     *            the key of the item; an item no longer known is ignored,
+     *            and a disabled one, or any while read-only, is not selected
      */
     @ClientCallable
     void select(String key) {
@@ -511,7 +540,7 @@ public class Tree<T> extends Component
         if (item == null) {
             return;
         }
-        if (singleSelect.isReadOnly()) {
+        if (singleSelect.isReadOnly() || !itemEnabledProvider.test(item)) {
             sendSelection();
         } else {
             setSelectedItem(item, true);
@@ -601,7 +630,7 @@ public class Tree<T> extends Component
         Object id = dataProvider.getId(item);
         return new TreeItem(keyMapper.key(item), itemLabelGenerator.apply(item), itemIconGenerator.apply(item),
                 itemTooltipGenerator.apply(item), dataProvider.hasChildren(item), isExpanded(item),
-                Objects.equals(id, idOf(selectedItem)), selectionPathIds.contains(id));
+                Objects.equals(id, idOf(selectedItem)), selectionPathIds.contains(id), !itemEnabledProvider.test(item));
     }
 
     /**

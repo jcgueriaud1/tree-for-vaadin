@@ -178,6 +178,26 @@ class TreeTest extends BrowserlessTest {
     void theGeneratorsAreNotNull() {
         assertThrows(NullPointerException.class, () -> tree.setItemIconGenerator(null));
         assertThrows(NullPointerException.class, () -> tree.setItemTooltipGenerator(null));
+        assertThrows(NullPointerException.class, () -> tree.setItemEnabledProvider(null));
+    }
+
+    @Test
+    void itemsAreEnabledUnlessTheProviderSaysOtherwise() {
+        assertEquals(List.of(false, false), disabled(tree.fetchChildren(null, 0, 50)));
+
+        tree.setItemEnabledProvider(folder -> !folder.equals(music));
+
+        assertEquals(List.of(false, true), disabled(tree.fetchChildren(null, 0, 50)));
+    }
+
+    @Test
+    void settingTheEnabledProviderHasTheBrowserFetchTheItemsAgain() {
+        tree.fetchChildren(null, 0, 50);
+        calls("refresh");
+
+        tree.setItemEnabledProvider(folder -> true);
+
+        assertEquals(1, calls("refresh").size());
     }
 
     @Test
@@ -541,6 +561,28 @@ class TreeTest extends BrowserlessTest {
     }
 
     @Test
+    void theUserCannotSelectADisabledItem() {
+        tree.setItemEnabledProvider(folder -> !folder.equals(music));
+        String musicKey = key(music);
+        setSelectionCalls();
+
+        tree.select(musicKey);
+
+        assertNull(tree.asSingleSelect().getValue());
+        assertEquals(List.of(Arrays.asList((Object) null)), setSelectionCalls(), "the browser is told to undo it");
+    }
+
+    @Test
+    void theServerCanSelectADisabledItem() {
+        tree.setItemEnabledProvider(folder -> !folder.equals(music));
+
+        tree.asSingleSelect().setValue(music);
+
+        assertEquals(music, tree.asSingleSelect().getValue());
+        assertTrue(tree.fetchChildren(null, 0, 50).items().get(1).selected());
+    }
+
+    @Test
     void selectingFromTheServerExpandsNothing() {
         tree.asSingleSelect().setValue(letters);
 
@@ -687,6 +729,10 @@ class TreeTest extends BrowserlessTest {
     private String key(Folder rootItem) {
         return tree.fetchChildren(null, 0, 50).items().stream()
                 .filter(item -> item.label().equals(rootItem.name())).findFirst().orElseThrow().key();
+    }
+
+    private static List<Boolean> disabled(ItemPage page) {
+        return page.items().stream().map(TreeItem::disabled).toList();
     }
 
     private List<ComponentValueChangeEvent<Tree<Folder>, Folder>> recordValueChanges() {
