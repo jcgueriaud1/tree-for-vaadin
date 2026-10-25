@@ -969,6 +969,54 @@ describe('tfv-tree', () => {
     });
   });
 
+  describe('context menu', () => {
+    /** Right-clicks an element, and gives the detail the tree hands Vaadin's context menu while it is dispatched. */
+    function contextMenuDetail(tree: TfvTree, target: Element, wrap: boolean): unknown {
+      let detail: unknown;
+      const listener = (event: Event) => {
+        // A context menu opened by the contextmenu event gets it as its source event, one opened on click gets the click
+        detail = tree.getContextMenuBeforeOpenDetail(wrap ? new CustomEvent('vaadin-contextmenu', { detail: { sourceEvent: event } }) : event);
+      };
+      tree.addEventListener('contextmenu', listener);
+      target.dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, composed: true, cancelable: true }));
+      tree.removeEventListener('contextmenu', listener);
+      return detail;
+    }
+
+    it('tells a context menu the key of the item it opens on', async () => {
+      const tree = await treeWith(serverWith(FOLDERS));
+      await clickToggle(tree, 'Documents');
+
+      const label = item(tree, 'Letters').querySelector('[part="label"]')!;
+      expect(contextMenuDetail(tree, label, true)).to.deep.equal({ key: '0/1' });
+      expect(contextMenuDetail(tree, item(tree, 'Music'), false)).to.deep.equal({ key: '1' });
+    });
+
+    it('tells a context menu opened by a long press on iOS the item pressed, from the path saved on touch start', async () => {
+      const tree = await treeWith(serverWith(FOLDERS));
+      // Vaadin's gesture fires after a timeout, when the touchstart is no longer dispatched and has no path
+      const touchStart = Object.assign(new Event('touchstart'), { __composedPath: [item(tree, 'Music'), tree] });
+      const longPress = new CustomEvent('vaadin-contextmenu', { detail: { sourceEvent: touchStart } });
+
+      expect(tree.getContextMenuBeforeOpenDetail(longPress)).to.deep.equal({ key: '1' });
+    });
+
+    it('tells a context menu opened outside the items that there is no item', async () => {
+      const tree = await treeWith(serverWith(['Documents']));
+
+      expect(contextMenuDetail(tree, tree, true)).to.deep.equal({ key: '' });
+    });
+
+    it('keeps a context menu closed while disabled', async () => {
+      const tree = await treeWith(serverWith(['Documents']));
+      const event = new MouseEvent('contextmenu');
+
+      expect(tree.preventContextMenu(event)).to.be.false;
+      tree.disabled = true;
+      expect(tree.preventContextMenu(event)).to.be.true;
+    });
+  });
+
   describe('icons and tooltips', () => {
     function folderServer(): FakeServer {
       const server = serverWith(['Documents', 'Music', 'Pictures']);
